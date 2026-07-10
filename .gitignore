@@ -80,6 +80,6 @@ build
 AGENTS.md
 testFile
 .history/
-conversation-summary.md
 
 tests
+conversation-summary.md
