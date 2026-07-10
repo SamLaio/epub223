@@ -111,6 +111,11 @@ java -jar "C:\PortableApps\[epub] epubCheck\epubcheck.jar" "D:\project\epub223\t
 
 此專案由 [SamLaio](https://github.com/SamLaio) 維護，屬於我的專案。
 
+程式源引自以下上游專案：
+
+- [kevinhendricks/ePub3-itizer](https://github.com/kevinhendricks/ePub3-itizer)
+- [Sigil-Ebook/Sigil](https://github.com/Sigil-Ebook/Sigil)
+
 它改寫自早期的 Sigil `ePub3-itizer` 核心，但目前已經是獨立的 CLI 工具。
 
 授權採 GNU General Public License v3.0，完整內容請見 [`COPYING.txt`](COPYING.txt)。
