@@ -27,7 +27,6 @@ epub3itizer/            # CLI 主程式
   cli.py
   compat.py
   conversion.py
-plugin/                 # 原始 Sigil plugin 相關檔案
 src/                    # 原始轉換輔助模組
 tests/                  # 測試資料
 ```
