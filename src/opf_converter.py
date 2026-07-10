@@ -5,7 +5,7 @@
 from __future__ import unicode_literals, division, absolute_import, print_function
 
 import sys, os, re
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from urllib.parse import quote, unquote
@@ -231,7 +231,7 @@ class Opf_Converter(object):
                         res.append(taginfo_toxml(["meta",{"refines":"#"+series_id, "property":"group-position"}, self.series_index]))
 
                 # append the required dcterms modified information
-                res.append(taginfo_toxml(["meta", {"property":"dcterms:modified"}, datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")])) 
+                res.append(taginfo_toxml(["meta", {"property":"dcterms:modified"}, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")]))
 
                 # if there are Media Overlays properties, append the required media:* meta
                 if len(self.moprops) > 0:
