@@ -108,7 +108,7 @@ java -jar "C:\PortableApps\[epub] epubCheck\epubcheck.jar" "D:\project\epub223\t
 
 ## 專案與授權
 
-此專案由 [SamLaio](https://github.com/SamLaio) 維護，屬於我的專案。
+此專案由 [SamLaio](https://github.com/SamLaio) 維護。
 
 程式源引自以下上游專案：
 
