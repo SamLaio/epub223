@@ -46,6 +46,22 @@ def filter_property_tokens(properties):
     return " ".join(dict.fromkeys(tokens))
 
 
+def make_xml_id(candidate, existing):
+    candidate = candidate or "id"
+    candidate = re.sub(r"[^A-Za-z0-9_.:-]", "_", candidate)
+    if not re.match(r"^[A-Za-z_]", candidate):
+        candidate = "id_" + candidate
+    if candidate == "":
+        candidate = "id"
+    value = candidate
+    counter = 2
+    while value in existing:
+        value = "%s_%d" % (candidate, counter)
+        counter += 1
+    existing.add(value)
+    return value
+
+
 def encode_local_href(href):
     if not href:
         return href
@@ -73,11 +89,12 @@ _OPF_PARENT_TAGS = ['?xml', 'package', 'metadata', 'dc-metadata', 'x-metadata', 
 # note all href returned by the guide are opf relative hrefs not book hrefs
 class Opf_Converter(object):
 
-    def __init__(self, opf2data, spine_properties, manifest_properties, mo_properties, man_ids):
+    def __init__(self, opf2data, spine_properties, manifest_properties, mo_properties, man_ids, media_type_overrides=None):
         self.opf = opf2data
         self.sprops = spine_properties.copy()
         self.mprops = manifest_properties.copy()
         self.moprops = mo_properties.copy()
+        self.media_type_overrides = media_type_overrides or {}
         self.opos = 0
         self.lang = "en"
         self.uniqueid = None
@@ -91,7 +108,12 @@ class Opf_Converter(object):
         self.series_index = None
         self.title_id = None
         self.cover_id = None
-        self.all_ids = man_ids.copy()
+        self.all_ids = []
+        self.id_map = {}
+        self._used_ids = set()
+        for mid in man_ids:
+            self.id_map[mid] = make_xml_id(mid, self._used_ids)
+            self.all_ids.append(self.id_map[mid])
         self.has_ncx = None
         self.has_pmap = None
         self.ppd = None
@@ -103,9 +125,8 @@ class Opf_Converter(object):
 
 
     def valid_id(self, candidate):
-        newid = candidate
-        while newid in self.all_ids:
-            newid = "x" + newid
+        newid = make_xml_id(candidate, self._used_ids)
+        self.all_ids.append(newid)
         return newid
 
     # OPF tag iterator
@@ -262,7 +283,13 @@ class Opf_Converter(object):
             # manifest items
             if prefix.endswith("manifest") and tname == "item":
                 id = tattr.get("id",'')
+                mapped_id = self.id_map.get(id, id)
+                if mapped_id != id:
+                    tattr["id"] = mapped_id
                 mtype = tattr.get("media-type","")
+                if id in self.media_type_overrides:
+                    mtype = self.media_type_overrides[id]
+                    tattr["media-type"] = mtype
                 if "href" in tattr:
                     tattr["href"] = encode_local_href(tattr["href"])
                 # remap font media types to something epub3 can live with
@@ -273,9 +300,9 @@ class Opf_Converter(object):
                     mtype = "application/vnd.ms-opentype"
                     tattr["media-type"] = mtype
                 if mtype == "application/x-dtbncx+xml":
-                    self.has_ncx = id
+                    self.has_ncx = mapped_id
                 elif mtype == "application/oebs-page-map+xml":
-                    self.has_pmap = id
+                    self.has_pmap = mapped_id
                 if id in self.mprops:
                     tattr["properties"] = self.mprops[id]
                 if id == self.cover_id:
@@ -318,6 +345,13 @@ class Opf_Converter(object):
 
             if tname == "itemref" and prefix.endswith("spine"):
                 idref = tattr.get("idref", "")
+                if idref in self.id_map:
+                    tattr["idref"] = self.id_map[idref]
+                linear_type = tattr.pop("linear-type", None)
+                if linear_type in {"yes", "no"} and "linear" not in tattr:
+                    tattr["linear"] = linear_type
+                if tattr.get("linear") not in {None, "yes", "no"}:
+                    del tattr["linear"]
                 props = ""
                 if "properties" in tattr:
                     props = tattr["properties"]

@@ -94,6 +94,31 @@ java -jar "C:\PortableApps\[epub] epubCheck\epubcheck.jar" "D:\project\epub223\t
 
 本專案目前已實測輸出可通過 `epubCheck`，顯示 `0 errors / 0 warnings`。
 
+## 修復參考來源
+
+當轉換結果無法通過 `epubCheck`，本專案會優先把可泛化的修復寫成
+`epub3itizer` 內的 Python 規則，並補上回歸測試。以下工具只作為修復思路、
+錯誤分類、驗證流程與測試案例設計的參考來源；不直接複製、移植或機械式改寫
+第三方專案的程式碼。
+
+- [calibre](https://github.com/kovidgoyal/calibre)：參考 Editor 的 Check book / auto-fix 思路。
+- [Sigil](https://github.com/Sigil-Ebook/Sigil)：參考 Mend / Mend and Prettify / Mend On Open 思路。
+- [rsking/epub-fixer](https://github.com/rsking/epub-fixer)
+- [innocenat/kindle-epub-fix](https://github.com/innocenat/kindle-epub-fix)
+- [amanvirparhar/gempress](https://github.com/amanvirparhar/gempress)
+- [Mimoja/MyBookLibrary](https://github.com/Mimoja/MyBookLibrary)
+- [dankatri/epub-fixer](https://github.com/dankatri/epub-fixer)
+- [chodzkos/epubforge](https://github.com/chodzkos/epubforge)
+- [crdjm/epub-accessibility-fixer](https://github.com/crdjm/epub-accessibility-fixer)
+- [OpenBookPublishers/obp-epub-fixup](https://github.com/OpenBookPublishers/obp-epub-fixup)
+- [madeindjs/epub-code-block-fixer](https://github.com/madeindjs/epub-code-block-fixer)：參考程式碼區塊、`pre` / `code` 與 XHTML 輸出清理。
+- [veripublica/epubsana](https://github.com/veripublica/epubsana)：參考 EPUBCheck 類錯誤到安全修復 proposal 的分類方式。
+- [RajaaKahel/epubfix](https://github.com/RajaaKahel/epubfix)：參考 Kobo / RMSDK 對現代 CSS 不相容時的 fallback 思路。
+- [NRGunby/clean_epub](https://github.com/NRGunby/clean_epub)：參考掃描書常見頁首、頁碼與段落斷行污染清理。
+- [cerasnix/epub-ruby-fix-for-apple-books](https://github.com/cerasnix/epub-ruby-fix-for-apple-books)：參考 ruby / rt / rp 在 Apple Books 顯示與選取相容性問題。
+- [JoeCotellese/bookery](https://github.com/JoeCotellese/bookery)：參考 metadata-first 與非破壞式 EPUB metadata workflow。
+- [chayprabs/epub-validate-repair](https://github.com/chayprabs/epub-validate-repair)：參考 manifest、spine、TOC、metadata 與批次驗證修復流程。
+
 ## 與 Sigil plugin 版的差異
 
 除了 UI 之外，主要差異是：
