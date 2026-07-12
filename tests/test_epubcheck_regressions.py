@@ -1,5 +1,6 @@
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ from epub3itizer.conversion import (  # noqa: E402
     sanitize_css,
     sync_ncx_uid,
 )
+from epub3itizer.repair import repair_epub  # noqa: E402
 
 
 def test_opf_metadata_attrs_are_epub3_safe():
@@ -77,6 +79,59 @@ def test_opf_package_prefix_includes_calibre_when_needed():
     assert 'prefix="rendition: http://www.idpf.org/vocab/rendition/# calibre: http://calibre.kovidgoyal.net/2009/metadata"' in opf3
     assert 'properties="calibre:title-page"' in opf3
     etree.fromstring(opf3.encode("utf-8"))
+
+
+def _write_case_mismatch_epub(epub_path: Path) -> None:
+    container_xml = """<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OPS/package.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+    opf = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Sample</dc:title>
+    <dc:language>zh-Hant</dc:language>
+    <dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="chap" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover" href="Images/cover.jpg" media-type="image/jpeg"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap"/>
+  </spine>
+</package>
+"""
+    xhtml = """<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>Sample</title></head>
+  <body><p><img src="Images/COVER.JPG" alt="cover"/></p></body>
+</html>
+"""
+    with zipfile.ZipFile(epub_path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", container_xml)
+        zf.writestr("OPS/package.opf", opf)
+        zf.writestr("OPS/ch1.xhtml", xhtml)
+        zf.writestr("OPS/Images/cover.jpg", b"\xff\xd8\xff\xd9")
+
+
+def test_repair_only_fixes_case_mismatched_local_hrefs(tmp_path):
+    source = tmp_path / "sample.epub"
+    output = tmp_path / "sample_repaired.epub"
+    _write_case_mismatch_epub(source)
+
+    result = repair_epub(source, output)
+
+    assert result == output
+    with zipfile.ZipFile(output) as zf:
+        data = zf.read("OPS/ch1.xhtml").decode("utf-8")
+    assert "Images/cover.jpg" in data
+    assert "COVER.JPG" not in data
 
 
 def test_empty_xhtml_title_is_filled_from_href():

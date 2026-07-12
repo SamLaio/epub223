@@ -4,9 +4,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional, Tuple
+from typing import Callable, Iterator, List, Optional, Tuple
 
 from .conversion import convert_epub2_to_epub3
+from .repair import repair_epub
 
 
 def _is_under(path: Path, parent: Path) -> bool:
@@ -27,8 +28,8 @@ def _iter_epub_files(input_dir: Path, recursive: bool, exclude_dir: Optional[Pat
         yield path
 
 
-def _default_output_dir(input_dir: Path) -> Path:
-    return input_dir.parent / f"{input_dir.name}_epub3"
+def _default_output_dir(input_dir: Path, suffix: str) -> Path:
+    return input_dir.parent / f"{input_dir.name}{suffix}"
 
 
 def _configure_text_streams() -> None:
@@ -39,13 +40,14 @@ def _configure_text_streams() -> None:
             pass
 
 
-def _convert_directory(
+def _process_directory(
     input_dir: Path,
     output_dir: Path,
     *,
     recursive: bool = False,
     suffix: str = "_epub3",
     overwrite: bool = False,
+    processor: Callable[[Path, Optional[Path]], Path] = convert_epub2_to_epub3,
 ) -> Tuple[List[Path], List[Path]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     converted: List[Path] = []
@@ -57,7 +59,7 @@ def _convert_directory(
             print(f"Skipping existing file: {target}")
             continue
         try:
-            result = convert_epub2_to_epub3(source, target)
+            result = processor(source, target)
             converted.append(result)
             print(f"Output written to {result}")
         except Exception as exc:
@@ -67,13 +69,14 @@ def _convert_directory(
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert EPUB2 books into EPUB3.")
+    parser = argparse.ArgumentParser(description="Convert EPUB2 books into EPUB3, or repair EPUB packages in place.")
     parser.add_argument("input", help="Input .epub file or EPUB folder")
     parser.add_argument("-o", "--output", help="Output .epub file path for a single file input")
     parser.add_argument("--output-dir", help="Output directory for batch folder conversion")
     parser.add_argument("--recursive", action="store_true", help="Recursively scan subfolders for .epub files")
-    parser.add_argument("--suffix", default="_epub3", help="Suffix added before .epub in batch mode")
+    parser.add_argument("--suffix", help="Suffix added before .epub in batch mode")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files")
+    parser.add_argument("--repair-only", action="store_true", help="Only run the reusable EPUB repair pipeline")
     return parser.parse_args(argv)
 
 
@@ -81,20 +84,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     _configure_text_streams()
     args = parse_args(argv)
     input_path = Path(args.input)
+    suffix = args.suffix or ("_repaired" if args.repair_only else "_epub3")
+    processor = repair_epub if args.repair_only else convert_epub2_to_epub3
 
     if input_path.is_dir():
         if args.output:
             print("Error: use --output-dir when the input is a folder", file=sys.stderr)
             return 1
-        output_dir = Path(args.output_dir) if args.output_dir else _default_output_dir(input_path)
-        converted, failed = _convert_directory(
+        output_dir = Path(args.output_dir) if args.output_dir else _default_output_dir(input_path, suffix)
+        converted, failed = _process_directory(
             input_path,
             output_dir,
             recursive=args.recursive,
-            suffix=args.suffix,
+            suffix=suffix,
             overwrite=args.overwrite,
+            processor=processor,
         )
-        print(f"Batch complete: {len(converted)} converted, {len(failed)} failed")
+        action = "repaired" if args.repair_only else "converted"
+        print(f"Batch complete: {len(converted)} {action}, {len(failed)} failed")
         return 1 if failed else 0
 
     if args.output_dir:
@@ -103,7 +110,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     output_path = Path(args.output) if args.output else None
     try:
-        result = convert_epub2_to_epub3(input_path, output_path)
+        result = processor(input_path, output_path)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

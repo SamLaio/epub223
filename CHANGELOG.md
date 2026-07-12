@@ -1,5 +1,16 @@
 # Change Log
 
+## 2026-07-13
+
+- 抽離可重用的 EPUB 修復流程到獨立模組 `epub3itizer.repair`，讓單獨修復與 EPUB2 -> EPUB3 轉換後的後處理共用同一套規則。
+- CLI 新增 `--repair-only`，可直接對單一 EPUB 或整個資料夾套用修復流程，不必先做 EPUB2 -> EPUB3 轉換。
+- 轉 EPUB3 的主流程改為呼叫共用修復管線，避免轉檔與修復邏輯分叉。
+
+## 2026-07-13
+
+- 補強 agent 慣例：任何需要 Codex 介入的 EPUB 修復，必須先分類為可泛用修復、單本書特有破損、不安全泛化或需要人工內容判斷。
+- 明確規定可泛用修復不得只停留在單本 EPUB 或工作檔，必須寫回 `epub3itizer`、補 regression test、更新 README 或相關說明、更新 `CHANGELOG.md`，並執行 `pytest -q` 後再回到書庫流程重跑。
+
 ## 2026-07-12
 
 - 修正 OPF package `prefix` 漏宣告 `calibre:` 的問題；當 manifest item 使用 `calibre:title-page` 等屬性時，轉換器會自動補上 `calibre: http://calibre.kovidgoyal.net/2009/metadata`，避免 EPUBCheck `OPF-028`。

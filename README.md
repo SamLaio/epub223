@@ -58,6 +58,20 @@ python convert_epub3.py "D:\project\epub223\testFile\input.epub" -o "D:\project\
 python -m epub3itizer "D:\project\epub223\testFile\input.epub" -o "D:\project\epub223\testFile\output.epub"
 ```
 
+### 單獨修復 EPUB
+
+如果你已經有 EPUB3 檔，只想套用同一套修復規則，不需要重新做 EPUB2 -> EPUB3 轉換，可以用修復模式：
+
+```bash
+python -m epub3itizer --repair-only "D:\project\epub223\testFile\input.epub" -o "D:\project\epub223\testFile\output_repaired.epub"
+```
+
+資料夾模式也支援批次修復：
+
+```bash
+python -m epub3itizer --repair-only "D:\project\epub223\testFile\books" --recursive --output-dir "D:\project\epub223\testFile\books_repaired"
+```
+
 ### 整個資料夾批次轉換
 
 ```bash
@@ -81,8 +95,9 @@ D:\project\epub223\epub2  ->  D:\project\epub223\epub2_epub3
 - `-o, --output`：單檔輸出路徑
 - `--output-dir`：批次模式輸出資料夾
 - `--recursive`：遞迴掃描子資料夾
-- `--suffix`：批次輸出檔名後綴，預設是 `_epub3`
+- `--suffix`：批次輸出檔名後綴，轉換預設是 `_epub3`，修復預設是 `_repaired`
 - `--overwrite`：覆蓋已存在的輸出檔
+- `--repair-only`：只執行可重用的 EPUB 修復流程，不做 EPUB2 -> EPUB3 轉換
 
 ## 驗證
 

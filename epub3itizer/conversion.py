@@ -2834,23 +2834,12 @@ def convert_epub2_to_epub3(input_path: Path, output_path: Optional[Path] = None)
         print("..creating:", nav_href)
         navdata = build_nav(nav_href, doctitle, toc_nodes, pagelist, guide, opf_dir, final_spine_hrefs[0] if final_spine_hrefs else "")
         write_text_file(nav_path, navdata)
-        repair_missing_xhtml_references(book.root_dir)
-        repair_missing_css_references(book.root_dir)
-        add_missing_manifest_items(book.root_dir, opf_href)
-        cleanup_opf_manifest(book.root_dir, opf_href)
         final_uid = opf_unique_identifier_value(opf3_path)
         if ncx_path.exists() and final_uid:
             sync_ncx_uid(ncx_path, final_uid)
-        strip_links_from_legacy_toc_files(book.root_dir, opf_href)
-        cleanup_nav_leaf_spans(book.root_dir, opf_href)
-        normalize_all_xhtml_files(book.root_dir)
-        add_fixed_layout_viewports(book.root_dir, opf_href)
-        repair_missing_xhtml_references(book.root_dir)
-        repair_missing_css_references(book.root_dir)
-        add_missing_manifest_items(book.root_dir, opf_href)
-        cleanup_opf_manifest(book.root_dir, opf_href)
-        cleanup_nav_leaf_spans(book.root_dir, opf_href)
-        sanitize_all_css_files(book.root_dir)
+        from .repair import repair_epub_contents
+
+        repair_epub_contents(book.root_dir, opf_href)
 
         mimetype_path = book.root_dir / "mimetype"
         write_text_file(mimetype_path, "application/epub+zip")
