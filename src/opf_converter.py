@@ -85,6 +85,12 @@ _epub3_allowed_dctypes = ["dictionary", "index", "distributable-object", "edupub
 
 _OPF_PARENT_TAGS = ['?xml', 'package', 'metadata', 'dc-metadata', 'x-metadata', 'manifest', 'spine', 'tours', 'guide']
 
+_PACKAGE_PREFIXES = {
+    "rendition": "http://www.idpf.org/vocab/rendition/#",
+    "calibre": "http://calibre.kovidgoyal.net/2009/metadata",
+    "media": "http://www.idpf.org/epub/vocab/overlays/#",
+}
+
 
 # note all href returned by the guide are opf relative hrefs not book hrefs
 class Opf_Converter(object):
@@ -182,7 +188,7 @@ class Opf_Converter(object):
             if tname == "package":
                 tattr["xmlns"] = "http://www.idpf.org/2007/opf"
                 tattr["version"] = "3.0"
-                tattr["prefix"] = "rendition: http://www.idpf.org/vocab/rendition/#"
+                tattr["prefix"] = self.package_prefix_value()
                 self.uniqueid = tattr.get("unique-identifier", None)
                 if self.uniqueid:
                     self.all_ids.append(self.uniqueid)
@@ -696,6 +702,14 @@ class Opf_Converter(object):
                 continue
             cleaned[key] = value
         return cleaned
+
+    def package_prefix_value(self):
+        prefixes = ["rendition: %s" % _PACKAGE_PREFIXES["rendition"]]
+        if "calibre:" in self.opf:
+            prefixes.append("calibre: %s" % _PACKAGE_PREFIXES["calibre"])
+        if self.moprops or "media:" in self.opf:
+            prefixes.append("media: %s" % _PACKAGE_PREFIXES["media"])
+        return " ".join(prefixes)
 
 
     def mid_to_mo_id(self, mid):

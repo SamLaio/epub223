@@ -58,6 +58,27 @@ def test_opf_metadata_attrs_are_epub3_safe():
     etree.fromstring(opf3.encode("utf-8"))
 
 
+def test_opf_package_prefix_includes_calibre_when_needed():
+    opf2 = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+<dc:title>Sample</dc:title>
+<dc:language>en</dc:language>
+<dc:identifier id="uid">123</dc:identifier>
+</metadata>
+<manifest>
+<item id="titlepage" href="titlepage.xhtml" media-type="application/xhtml+xml" properties="calibre:title-page" />
+</manifest>
+<spine><itemref idref="titlepage" /></spine>
+</package>
+"""
+    opf3 = Opf_Converter(opf2, {}, {}, {}, ["titlepage"]).get_opf3()
+
+    assert 'prefix="rendition: http://www.idpf.org/vocab/rendition/# calibre: http://calibre.kovidgoyal.net/2009/metadata"' in opf3
+    assert 'properties="calibre:title-page"' in opf3
+    etree.fromstring(opf3.encode("utf-8"))
+
+
 def test_empty_xhtml_title_is_filled_from_href():
     root = etree.fromstring(
         b"""<html xmlns="http://www.w3.org/1999/xhtml">

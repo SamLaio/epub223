@@ -31,6 +31,14 @@ def _default_output_dir(input_dir: Path) -> Path:
     return input_dir.parent / f"{input_dir.name}_epub3"
 
 
+def _configure_text_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _convert_directory(
     input_dir: Path,
     output_dir: Path,
@@ -70,6 +78,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    _configure_text_streams()
     args = parse_args(argv)
     input_path = Path(args.input)
 

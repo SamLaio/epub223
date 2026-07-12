@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-07-12
+
+- 修正 OPF package `prefix` 漏宣告 `calibre:` 的問題；當 manifest item 使用 `calibre:title-page` 等屬性時，轉換器會自動補上 `calibre: http://calibre.kovidgoyal.net/2009/metadata`，避免 EPUBCheck `OPF-028`。
+- 同步讓轉換器在需要時宣告 `media: http://www.idpf.org/epub/vocab/overlays/#`，避免後續 Media Overlays metadata 產生同類 prefix 錯誤。
+- 新增回歸測試，覆蓋 `calibre:title-page` 的 package prefix 輸出。
+- CLI 啟動時會將 stdout / stderr 切到 UTF-8，避免路徑含變音符號或其他 Unicode 字元時，最後一行 `Output written to ...` 因 `cp950` 編碼失敗而誤報。
+
 ## 2026-07-11
 
 - 強化剩餘 EPUB2 轉 EPUB3 的 EPUBCheck 修復：
