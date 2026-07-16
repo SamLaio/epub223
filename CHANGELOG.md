@@ -10,6 +10,10 @@
 
 - 補強 agent 慣例：任何需要 Codex 介入的 EPUB 修復，必須先分類為可泛用修復、單本書特有破損、不安全泛化或需要人工內容判斷。
 - 明確規定可泛用修復不得只停留在單本 EPUB 或工作檔，必須寫回 `epub3itizer`、補 regression test、更新 README 或相關說明、更新 `CHANGELOG.md`，並執行 `pytest -q` 後再回到書庫流程重跑。
+- 新增可選簡轉正參數 `--convert-chinese s2tw`，沿用 `metaFinder` 的 `OpenCC("s2tw")` 與自訂替換檔做法；預設仍為 `none`，不會自動改動書內文字。
+- 簡轉正會處理 XHTML、OPF、NCX、XML 的可讀文字與 `title`、`alt`、`content` 等文字屬性，並避開 `href`、`src`、`id`、CSS、URL 與 script/style 內容。
+- 自訂替換會在 OpenCC 轉換前後各套用一次，讓簡體 key 與正體 key 都能命中，例如 `实时` 可正確轉為 `即時`。
+- 新增回歸測試，覆蓋簡轉正 CLI 參數、OpenCC 與自訂替換、以及不改連結路徑的行為。
 
 ## 2026-07-12
 

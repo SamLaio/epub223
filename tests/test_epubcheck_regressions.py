@@ -32,6 +32,8 @@ from epub3itizer.conversion import (  # noqa: E402
     sanitize_css,
     sync_ncx_uid,
 )
+from epub3itizer.chinese import convert_chinese_document, to_traditional  # noqa: E402
+from epub3itizer.cli import parse_args  # noqa: E402
 from epub3itizer.repair import repair_epub  # noqa: E402
 
 
@@ -132,6 +134,34 @@ def test_repair_only_fixes_case_mismatched_local_hrefs(tmp_path):
         data = zf.read("OPS/ch1.xhtml").decode("utf-8")
     assert "Images/cover.jpg" in data
     assert "COVER.JPG" not in data
+
+
+def test_convert_chinese_document_converts_readable_text_not_links():
+    source = """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>汉字 中国</title><meta name="description" content="实时"/></head>
+<body><p title="三民书局">汉字<script>var name = "汉字";</script><a href="Text/汉字.xhtml" id="汉字">链接</a><img src="Images/汉字.jpg" alt="中国"/></p></body>
+</html>"""
+
+    output = convert_chinese_document(source, "s2tw")
+
+    assert "漢字 中國" in output
+    assert 'content="即時"' in output
+    assert 'title="三民書局"' in output
+    assert 'alt="中國"' in output
+    assert 'href="Text/汉字.xhtml"' in output
+    assert 'src="Images/汉字.jpg"' in output
+    assert 'id="汉字"' in output
+    assert 'var name = "汉字";' in output
+
+
+def test_convert_chinese_cli_option_is_explicit():
+    args = parse_args(["input.epub", "-o", "output.epub", "--convert-chinese", "s2tw"])
+
+    assert args.convert_chinese == "s2tw"
+
+
+def test_to_traditional_uses_opencc_and_custom_replacements():
+    assert to_traditional("汉字 中国 实时") == "漢字 中國 即時"
 
 
 def test_empty_xhtml_title_is_filled_from_href():

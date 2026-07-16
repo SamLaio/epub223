@@ -27,6 +27,7 @@ if str(SRC_DIR) not in sys.path:
 
 from html_namedentities import named_entities  # noqa: E402
 from opf_converter import Opf_Converter  # noqa: E402
+from .chinese import convert_chinese_in_package  # noqa: E402
 from .compat import EpubBookAdapter  # noqa: E402
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
@@ -2744,7 +2745,7 @@ def zip_epub(temp_dir: Path, output_path: Path) -> None:
             zf.write(file_path, arcname, compress_type=zipfile.ZIP_DEFLATED)
 
 
-def convert_epub2_to_epub3(input_path: Path, output_path: Optional[Path] = None) -> Path:
+def convert_epub2_to_epub3(input_path: Path, output_path: Optional[Path] = None, convert_chinese: Optional[str] = None) -> Path:
     input_path = input_path.resolve()
     if output_path is None:
         if input_path.is_dir():
@@ -2840,6 +2841,7 @@ def convert_epub2_to_epub3(input_path: Path, output_path: Optional[Path] = None)
         from .repair import repair_epub_contents
 
         repair_epub_contents(book.root_dir, opf_href)
+        convert_chinese_in_package(book.root_dir, convert_chinese)
 
         mimetype_path = book.root_dir / "mimetype"
         write_text_file(mimetype_path, "application/epub+zip")

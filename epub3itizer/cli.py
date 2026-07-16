@@ -47,7 +47,8 @@ def _process_directory(
     recursive: bool = False,
     suffix: str = "_epub3",
     overwrite: bool = False,
-    processor: Callable[[Path, Optional[Path]], Path] = convert_epub2_to_epub3,
+    processor: Callable[[Path, Optional[Path], Optional[str]], Path] = convert_epub2_to_epub3,
+    convert_chinese: Optional[str] = None,
 ) -> Tuple[List[Path], List[Path]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     converted: List[Path] = []
@@ -59,7 +60,7 @@ def _process_directory(
             print(f"Skipping existing file: {target}")
             continue
         try:
-            result = processor(source, target)
+            result = processor(source, target, convert_chinese=convert_chinese)
             converted.append(result)
             print(f"Output written to {result}")
         except Exception as exc:
@@ -77,6 +78,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--suffix", help="Suffix added before .epub in batch mode")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files")
     parser.add_argument("--repair-only", action="store_true", help="Only run the reusable EPUB repair pipeline")
+    parser.add_argument(
+        "--convert-chinese",
+        choices=("none", "s2tw"),
+        default="none",
+        help="Optionally convert readable EPUB text from Simplified Chinese to Taiwan Traditional Chinese",
+    )
     return parser.parse_args(argv)
 
 
@@ -99,6 +106,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             suffix=suffix,
             overwrite=args.overwrite,
             processor=processor,
+            convert_chinese=args.convert_chinese,
         )
         action = "repaired" if args.repair_only else "converted"
         print(f"Batch complete: {len(converted)} {action}, {len(failed)} failed")
@@ -110,7 +118,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     output_path = Path(args.output) if args.output else None
     try:
-        result = processor(input_path, output_path)
+        result = processor(input_path, output_path, convert_chinese=args.convert_chinese)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

@@ -17,6 +17,7 @@
 - 可遞迴掃描子資料夾
 - 轉換時保留原始資料夾結構
 - 可搭配 `epubCheck` 驗證輸出檔
+- 可選擇把 EPUB 內可讀文字從簡體中文轉成臺灣正體中文
 
 ## 專案結構
 
@@ -42,6 +43,12 @@ tests/                  # 測試資料
 pip install lxml
 ```
 
+如果要使用簡轉正參數，另需安裝 `opencc-python-reimplemented`。
+
+```bash
+pip install opencc-python-reimplemented
+```
+
 如果你想在轉換後額外跑 `epubCheck` 驗證，才需要 Java 8+ 或可執行 `java -jar` 的環境。
 
 ## 使用方式
@@ -58,12 +65,33 @@ python convert_epub3.py "D:\project\epub223\testFile\input.epub" -o "D:\project\
 python -m epub3itizer "D:\project\epub223\testFile\input.epub" -o "D:\project\epub223\testFile\output.epub"
 ```
 
+### 簡體轉臺灣正體
+
+預設不會改動書內文字。需要簡轉正時，明確加上 `--convert-chinese s2tw`。
+
+```bash
+python -m epub3itizer "D:\project\epub223\testFile\input.epub" -o "D:\project\epub223\testFile\output.epub" --convert-chinese s2tw
+```
+
+這個選項會轉換 EPUB 內 XHTML、OPF、NCX、XML 的可讀文字與 `title`、`alt`、`content` 等文字屬性，但不會改 `href`、`src`、`id`、CSS、URL 或 script/style 內容。
+
+轉換邏輯沿用 `metaFinder` 的做法：
+
+- 使用 `opencc-python-reimplemented` 的 `OpenCC("s2tw")`。
+- 套用 `epub3itizer/custom_replacements.tsv` 裡的專案自訂替換。
+
 ### 單獨修復 EPUB
 
 如果你已經有 EPUB3 檔，只想套用同一套修復規則，不需要重新做 EPUB2 -> EPUB3 轉換，可以用修復模式：
 
 ```bash
 python -m epub3itizer --repair-only "D:\project\epub223\testFile\input.epub" -o "D:\project\epub223\testFile\output_repaired.epub"
+```
+
+修復模式也可以搭配簡轉正：
+
+```bash
+python -m epub3itizer --repair-only "D:\project\epub223\testFile\input.epub" -o "D:\project\epub223\testFile\output_repaired.epub" --convert-chinese s2tw
 ```
 
 資料夾模式也支援批次修復：
@@ -98,6 +126,7 @@ D:\project\epub223\epub2  ->  D:\project\epub223\epub2_epub3
 - `--suffix`：批次輸出檔名後綴，轉換預設是 `_epub3`，修復預設是 `_repaired`
 - `--overwrite`：覆蓋已存在的輸出檔
 - `--repair-only`：只執行可重用的 EPUB 修復流程，不做 EPUB2 -> EPUB3 轉換
+- `--convert-chinese {none,s2tw}`：可選簡轉正；預設 `none`
 
 ## 驗證
 

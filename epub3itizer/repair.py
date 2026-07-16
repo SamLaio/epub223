@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from .chinese import convert_chinese_in_package
 from . import conversion as conv
 from .compat import EpubBookAdapter
 
@@ -38,7 +39,7 @@ def _default_repair_output_path(input_path: Path) -> Path:
     return input_path.with_name(f"{input_path.stem}_repaired.epub")
 
 
-def repair_epub(input_path: Path, output_path: Optional[Path] = None) -> Path:
+def repair_epub(input_path: Path, output_path: Optional[Path] = None, convert_chinese: Optional[str] = None) -> Path:
     """Repair an EPUB file or EPUB folder and write a new EPUB archive."""
     input_path = input_path.resolve()
     if output_path is None:
@@ -50,6 +51,7 @@ def repair_epub(input_path: Path, output_path: Optional[Path] = None) -> Path:
         book._load()
         opf_href = book.get_opfbookpath()
         repair_epub_contents(book.root_dir, opf_href)
+        convert_chinese_in_package(book.root_dir, convert_chinese)
         mimetype_path = book.root_dir / "mimetype"
         conv.write_text_file(mimetype_path, "application/epub+zip")
         conv.zip_epub(book.root_dir, output_path)
