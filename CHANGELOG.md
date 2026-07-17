@@ -1,5 +1,10 @@
 # Change Log
 
+## 2026-07-17
+
+- OPF metadata 清理新增移除私有 `<meta property="hdf">`，避免部分 EPUB 內殘留 HyRead/DRM 相關私有 metadata 時觸發 EPUBCheck `OPF-027`。
+- CSS sanitizer 新增移除 `text-combine-horizontal: all;`，避免舊排版或閱讀器私有樣式造成 EPUBCheck / 閱讀器相容性問題；既有 `calibre_bookmarks.txt` 實體檔與 manifest 項目清理規則維持啟用。
+
 ## 2026-07-13
 
 - 抽離可重用的 EPUB 修復流程到獨立模組 `epub3itizer.repair`，讓單獨修復與 EPUB2 -> EPUB3 轉換後的後處理共用同一套規則。

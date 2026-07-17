@@ -1676,6 +1676,7 @@ def test_cleanup_opf_applies_calibre_style_structural_fixes(tmp_path):
 <dc:identifier id="empty"> </dc:identifier>
 <dc:meta property="dcterms:modified">2026-07-11T12:00:00Z</dc:meta>
 <dc:meta opf:name="cover" content="cover-image"/>
+<meta property="hdf">0401000000000160f8203861</meta>
 <opf:meta>2026-07-11T12:00:00Z</opf:meta>
 </metadata>
 <manifest>
@@ -1699,6 +1700,7 @@ def test_cleanup_opf_applies_calibre_style_structural_fixes(tmp_path):
     assert 'idref="id_1bad" linear="no"' in data
     assert 'linear="maybe"' not in data
     assert 'duokan-page-fullscreen' not in data
+    assert 'property="hdf"' not in data
     assert "<opf:meta" not in data
     assert data.count('property="dcterms:modified"') == 1
     assert 'id="nohref"' not in data
@@ -1955,6 +1957,20 @@ def test_css_direction_and_star_hacks_are_removed():
     assert "font-size:100%" in output
     assert "direction:" not in output
     assert "writing-mode: tb-rl" in output
+
+
+def test_css_text_combine_horizontal_all_is_removed():
+    output = sanitize_css(
+        """.tcy {
+    writing-mode: vertical-rl;
+    text-combine-horizontal: all;
+    text-align: center;
+}"""
+    )
+
+    assert "text-combine-horizontal" not in output
+    assert "writing-mode: vertical-rl" in output
+    assert "text-align: center" in output
 
 
 def test_css_fullwidth_percent_is_normalized():

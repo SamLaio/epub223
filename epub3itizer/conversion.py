@@ -1287,6 +1287,7 @@ def sanitize_css(data: str) -> str:
         previous = data
         data = re.sub(r"(?im)(font-family\s*:\s*[^;\n{}]+);(?=\s*[^:\n{};]+;)", r"\1,", data)
     data = re.sub(r"(?i)(?<=[{;])\s*direction\s*:\s*[^;{}]+;?", "", data)
+    data = re.sub(r"(?i)(?<=[{;])\s*text-combine-horizontal\s*:\s*all\s*;?", "", data)
     data = re.sub(r"(?<=[{;])\s*\*([-\w]+\s*:)", r"\1", data)
     data = re.sub(r"(?s)(^|})\s*(?:[-\w]+\s*:\s*[^;{}]+;\s*)+\}\s*", r"\1", data)
     if "{" not in data:
@@ -1969,6 +1970,7 @@ def is_invalid_svg_resource(path: Path) -> bool:
 
 
 PRIVATE_OPF_PROPERTY_TOKENS = {"duokan-page-fitwindow", "duokan-page-fullscreen"}
+PRIVATE_OPF_META_PROPERTIES = {"hdf"}
 PUBLICATION_RESOURCE_SUFFIXES = {
     ".css",
     ".gif",
@@ -2319,6 +2321,10 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                 changed = True
                 continue
         if meta.get("property", "").startswith("ibooks:") and not (meta.text or "").strip():
+            metadata.remove(meta)
+            changed = True
+            continue
+        if meta.get("property") in PRIVATE_OPF_META_PROPERTIES:
             metadata.remove(meta)
             changed = True
             continue

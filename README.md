@@ -18,6 +18,7 @@
 - 轉換時保留原始資料夾結構
 - 可搭配 `epubCheck` 驗證輸出檔
 - 可選擇把 EPUB 內可讀文字從簡體中文轉成臺灣正體中文
+- 轉換與修復流程會清理常見閱讀器殘留，例如 `calibre_bookmarks.txt`，以及 EPUBCheck 不友善的 CSS 宣告如 `text-combine-horizontal: all;`
 
 ## 專案結構
 
