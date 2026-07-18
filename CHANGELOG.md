@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-07-18
+
+- 簡轉正 `--convert-chinese s2tw` 參考 `Hopkins1/TradSimpChinese` 的 quotation marks 做法，新增西式彎引號 `“”‘’` 到臺灣正體直角引號 `「」『』` 的直接對照轉換；仍只處理可讀文字與文字屬性，不改 `href`、`src`、`id`、CSS、URL 或 script/style 內容。
+- 官方 `nav.xhtml` 清理新增 `NAV-011` 閱讀順序修復：當父層 `<li>` 同時含有子目錄，且父層連結目標位於子項目前方或相同 spine 項目時，會把父層 `<a>` 改為 `<span>`；同一 spine 檔案若已出現 fragment 連結，後續裸連結會降級並由既有空 leaf 清理移除，避免目錄連回檔案開頭造成順序倒退。
+- EPUB 清理新增移除 `Provider.txt`，不論其位於 EPUB 包內哪個資料夾，都會一併清除實體檔、OPF manifest 項目與 spine 參照，避免平台殘留檔被保留在書內。
+
 ## 2026-07-17
 
 - OPF metadata 清理新增移除私有 `<meta property="hdf">`，避免部分 EPUB 內殘留 HyRead/DRM 相關私有 metadata 時觸發 EPUBCheck `OPF-027`。

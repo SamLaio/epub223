@@ -54,6 +54,7 @@ HTML5_HTTP_EQUIV = {
 HTML5_DIMENSION_ELEMENTS = {"canvas", "embed", "iframe", "img", "input", "object", "source", "video"}
 JAVASCRIPT_MEDIA_TYPES = {"application/javascript", "application/ecmascript", "text/javascript", "text/ecmascript"}
 CALIBRE_BOOKMARKS = {"meta-inf/calibre_bookmarks.txt"}
+PRIVATE_RESIDUE_FILENAMES = {"provider.txt"}
 LIST_CONTAINER_ELEMENTS = {"menu", "ol", "ul"}
 FOREIGN_IMAGE_SUFFIXES = {".emf", ".wmf"}
 PHRASING_PARENT_ELEMENTS = {
@@ -1815,7 +1816,16 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
         if manifest_hrefs.get(itemref.get("idref", ""))
     ]
     spine_hrefs = set(spine_href_list)
+    spine_order = {href: index for index, href in enumerate(spine_href_list)}
     nav_dir = posixpath.dirname(nav_rel) or "."
+    def nav_target_spine_index(href: str) -> Optional[int]:
+        base, _frag = split_href(href)
+        parts = urlsplit(base)
+        if parts.scheme or parts.netloc or not base:
+            return None
+        target = posixpath.normpath(posixpath.join(nav_dir, unquote(base)))
+        return spine_order.get(target)
+
     if spine_hrefs:
         for anchor in list(root.xpath(".//*[local-name()='nav']//*[local-name()='a'][@href]")):
             base, _frag = split_href(anchor.get("href", ""))
@@ -1827,6 +1837,58 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
                 anchor.attrib.pop("href", None)
                 anchor.tag = f"{{{XHTML_NS}}}span"
                 changed = True
+    if spine_order:
+        for li in list(root.xpath(".//*[local-name()='nav']//*[local-name()='li']")):
+            child_ols = [
+                child
+                for child in li
+                if isinstance(child.tag, str) and etree.QName(child).localname == "ol"
+            ]
+            if not child_ols:
+                continue
+            direct_anchor = next(
+                (
+                    child
+                    for child in li
+                    if isinstance(child.tag, str)
+                    and etree.QName(child).localname == "a"
+                    and child.get("href")
+                ),
+                None,
+            )
+            if direct_anchor is None:
+                continue
+            parent_index = nav_target_spine_index(direct_anchor.get("href", ""))
+            if parent_index is None:
+                continue
+            child_indices = [
+                index
+                for ol in child_ols
+                for anchor in ol.xpath(".//*[local-name()='a'][@href]")
+                for index in [nav_target_spine_index(anchor.get("href", ""))]
+                if index is not None
+            ]
+            if child_indices and parent_index <= min(child_indices):
+                direct_anchor.attrib.pop("href", None)
+                direct_anchor.tag = f"{{{XHTML_NS}}}span"
+                changed = True
+        seen_fragment_for_spine: set[str] = set()
+        for anchor in list(root.xpath(".//*[local-name()='nav']//*[local-name()='a'][@href]")):
+            href = anchor.get("href", "")
+            base, frag = split_href(href)
+            parts = urlsplit(base)
+            if parts.scheme or parts.netloc or not base:
+                continue
+            target = posixpath.normpath(posixpath.join(nav_dir, unquote(base)))
+            if target not in spine_order:
+                continue
+            if not frag and target in seen_fragment_for_spine:
+                anchor.attrib.pop("href", None)
+                anchor.tag = f"{{{XHTML_NS}}}span"
+                changed = True
+                continue
+            if frag:
+                seen_fragment_for_spine.add(target)
     for ol in list(root.xpath(".//*[local-name()='nav']//*[local-name()='ol']")):
         if not any(isinstance(child.tag, str) and etree.QName(child).localname == "li" for child in ol):
             parent = ol.getparent()
@@ -1955,6 +2017,11 @@ def is_calibre_bookmark_path(path: str) -> bool:
     return posixpath.normpath(unquote(path)).replace("\\", "/").lower() in CALIBRE_BOOKMARKS
 
 
+def is_private_residue_path(path: str) -> bool:
+    normalized = posixpath.normpath(unquote(path)).replace("\\", "/").lower()
+    return normalized in CALIBRE_BOOKMARKS or posixpath.basename(normalized) in PRIVATE_RESIDUE_FILENAMES
+
+
 def is_javascript_resource(href: str, media_type: str = "") -> bool:
     return Path(unquote(href)).suffix.lower() == ".js" or media_type.lower() in JAVASCRIPT_MEDIA_TYPES
 
@@ -1993,7 +2060,7 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         return
     for path in root_dir.rglob("*"):
         rel = path.relative_to(root_dir).as_posix()
-        if path.is_file() and (path.suffix.lower() in {".js", ".ncx"} or is_calibre_bookmark_path(rel)):
+        if path.is_file() and (path.suffix.lower() in {".js", ".ncx"} or is_private_residue_path(rel)):
             try:
                 path.unlink()
             except OSError:
@@ -2088,7 +2155,7 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             rel_lower == "mimetype"
             or rel_lower.startswith("meta-inf/")
             or rel_lower == posixpath.normpath(opf_href).lower()
-            or is_calibre_bookmark_path(rel)
+            or is_private_residue_path(rel)
             or path.suffix.lower() not in PUBLICATION_RESOURCE_SUFFIXES
         ):
             continue
@@ -2116,7 +2183,7 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         item_path = posixpath.normpath(posixpath.join(opf_dir, unquote(href))) if href else ""
         if href and (
             is_javascript_resource(href, item.get("media-type", ""))
-            or is_calibre_bookmark_path(item_path)
+            or is_private_residue_path(item_path)
             or Path(unquote(href)).suffix.lower() in FOREIGN_IMAGE_SUFFIXES
             or is_invalid_svg_resource(root_dir / Path(item_path))
             or Path(unquote(href)).suffix.lower() == ".ncx"

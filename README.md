@@ -18,7 +18,8 @@
 - 轉換時保留原始資料夾結構
 - 可搭配 `epubCheck` 驗證輸出檔
 - 可選擇把 EPUB 內可讀文字從簡體中文轉成臺灣正體中文
-- 轉換與修復流程會清理常見閱讀器殘留，例如 `calibre_bookmarks.txt`，以及 EPUBCheck 不友善的 CSS 宣告如 `text-combine-horizontal: all;`
+- 轉換與修復流程會清理常見閱讀器或平台殘留，例如 `calibre_bookmarks.txt`、`Provider.txt`，以及 EPUBCheck 不友善的 CSS 宣告如 `text-combine-horizontal: all;`
+- 修復流程會整理官方 `nav.xhtml`，例如把可能造成 `NAV-011` 閱讀順序警告的父層目錄連結降級為純文字；同一檔案內 fragment 後的裸連結會被降級並由既有空 leaf 清理移除，保留可判定順序的子章節連結
 
 ## 專案結構
 
@@ -75,6 +76,7 @@ python -m epub3itizer "D:\project\epub223\testFile\input.epub" -o "D:\project\ep
 ```
 
 這個選項會轉換 EPUB 內 XHTML、OPF、NCX、XML 的可讀文字與 `title`、`alt`、`content` 等文字屬性，但不會改 `href`、`src`、`id`、CSS、URL 或 script/style 內容。
+同時會參考 `Hopkins1/TradSimpChinese` 的引號處理方式，將西式彎引號 `“”‘’` 轉成臺灣正體常用的 `「」『』`。
 
 轉換邏輯沿用 `metaFinder` 的做法：
 
@@ -156,6 +158,7 @@ java -jar "C:\PortableApps\[epub] epubCheck\epubcheck.jar" "D:\project\epub223\t
 - [chodzkos/epubforge](https://github.com/chodzkos/epubforge)
 - [crdjm/epub-accessibility-fixer](https://github.com/crdjm/epub-accessibility-fixer)
 - [OpenBookPublishers/obp-epub-fixup](https://github.com/OpenBookPublishers/obp-epub-fixup)
+- [Hopkins1/TradSimpChinese](https://github.com/Hopkins1/TradSimpChinese)：參考簡繁轉換中的引號格式轉換方式。
 - [madeindjs/epub-code-block-fixer](https://github.com/madeindjs/epub-code-block-fixer)：參考程式碼區塊、`pre` / `code` 與 XHTML 輸出清理。
 - [veripublica/epubsana](https://github.com/veripublica/epubsana)：參考 EPUBCheck 類錯誤到安全修復 proposal 的分類方式。
 - [RajaaKahel/epubfix](https://github.com/RajaaKahel/epubfix)：參考 Kobo / RMSDK 對現代 CSS 不相容時的 fallback 思路。

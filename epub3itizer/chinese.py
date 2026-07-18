@@ -21,6 +21,12 @@ TEXT_ATTRS = {
 }
 SKIP_TEXT_ELEMENTS = {"script", "style"}
 CUSTOM_REPLACEMENTS_FILE = Path(__file__).with_name("custom_replacements.tsv")
+WESTERN_TO_EAST_ASIAN_QUOTES = str.maketrans({
+    "“": "「",
+    "”": "」",
+    "‘": "『",
+    "’": "』",
+})
 
 _converter = None
 
@@ -70,6 +76,7 @@ def to_traditional(text: str | None) -> str | None:
         except Exception:
             converted = text
     converted = _apply_custom_replacements(converted)
+    converted = converted.translate(WESTERN_TO_EAST_ASIAN_QUOTES)
     return converted
 
 

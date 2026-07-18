@@ -136,22 +136,22 @@ def test_repair_only_fixes_case_mismatched_local_hrefs(tmp_path):
     assert "COVER.JPG" not in data
 
 
-def test_convert_chinese_document_converts_readable_text_not_links():
+def test_convert_chinese_document_converts_readable_text_quotes_not_links():
     source = """<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>汉字 中国</title><meta name="description" content="实时"/></head>
-<body><p title="三民书局">汉字<script>var name = "汉字";</script><a href="Text/汉字.xhtml" id="汉字">链接</a><img src="Images/汉字.jpg" alt="中国"/></p></body>
+<head><title>“汉字” ‘中国’</title><meta name="description" content="“实时”"/></head>
+<body><p title="‘三民书局’">“汉字”<script>var name = "“汉字”";</script><a href="Text/汉字.xhtml" id="汉字">链接</a><img src="Images/汉字.jpg" alt="“中国”"/></p></body>
 </html>"""
 
     output = convert_chinese_document(source, "s2tw")
 
-    assert "漢字 中國" in output
-    assert 'content="即時"' in output
-    assert 'title="三民書局"' in output
-    assert 'alt="中國"' in output
+    assert "「漢字」 『中國』" in output
+    assert 'content="「即時」"' in output
+    assert 'title="『三民書局』"' in output
+    assert 'alt="「中國」"' in output
     assert 'href="Text/汉字.xhtml"' in output
     assert 'src="Images/汉字.jpg"' in output
     assert 'id="汉字"' in output
-    assert 'var name = "汉字";' in output
+    assert 'var name = "“汉字”";' in output
 
 
 def test_convert_chinese_cli_option_is_explicit():
@@ -161,7 +161,7 @@ def test_convert_chinese_cli_option_is_explicit():
 
 
 def test_to_traditional_uses_opencc_and_custom_replacements():
-    assert to_traditional("汉字 中国 实时") == "漢字 中國 即時"
+    assert to_traditional("“汉字” ‘中国’ 实时") == "「漢字」 『中國』 即時"
 
 
 def test_empty_xhtml_title_is_filled_from_href():
@@ -658,6 +658,45 @@ def test_nav_links_to_non_spine_items_are_demoted(tmp_path):
     assert "drop" not in output
     assert "<ol/>" not in output
     assert "page-break-after" not in output
+
+
+def test_nav_parent_anchor_before_child_links_is_demoted(tmp_path):
+    (tmp_path / "content.opf").write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:language>zh-Hant</dc:language><dc:identifier id="uid">urn:uuid:x</dc:identifier></metadata>
+<manifest>
+<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+<item id="titlepage" href="titlepage.xhtml" media-type="application/xhtml+xml"/>
+<item id="chap1" href="index_split_000.html" media-type="application/xhtml+xml"/>
+<item id="chap2" href="index_split_001.html" media-type="application/xhtml+xml"/>
+</manifest>
+<spine><itemref idref="titlepage"/><itemref idref="chap1"/><itemref idref="chap2"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "nav.xhtml").write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>nav</title></head><body><nav epub:type="toc"><ol><li>
+<a href="index_split_000.html">Book</a>
+<ol>
+<li><a href="index_split_000.html#page_5">序章</a></li>
+<li><a href="index_split_000.html">第1章</a></li>
+<li><a href="index_split_001.html#page_148">版權頁</a></li>
+</ol>
+</li></ol></nav></body></html>""",
+        encoding="utf-8",
+    )
+
+    cleanup_nav_leaf_spans(tmp_path, "content.opf")
+    output = (tmp_path / "nav.xhtml").read_text(encoding="utf-8")
+
+    assert '<span>Book</span>' in output
+    assert 'href="index_split_000.html">Book</a>' not in output
+    assert "第1章" not in output
+    assert 'href="index_split_000.html">第1章</a>' not in output
+    assert 'href="index_split_000.html#page_5"' in output
+    assert 'href="index_split_001.html#page_148"' in output
 
 
 def test_invalid_body_metadata_and_list_items_are_normalized():
@@ -1634,6 +1673,7 @@ def test_existing_referenced_files_are_added_to_manifest(tmp_path):
 def test_cleanup_opf_removes_missing_items_js_bookmarks_and_dedupes_nav(tmp_path):
     (tmp_path / "OEBPS" / "Misc").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Misc" / "note.js").write_text("alert(1)", encoding="utf-8")
+    (tmp_path / "OEBPS" / "Misc" / "Provider.txt").write_text("provider", encoding="utf-8")
     (tmp_path / "META-INF").mkdir()
     (tmp_path / "META-INF" / "calibre_bookmarks.txt").write_text("bookmark", encoding="utf-8")
     (tmp_path / "OEBPS" / "nav.xhtml").write_text("<html/>", encoding="utf-8")
@@ -1642,12 +1682,13 @@ def test_cleanup_opf_removes_missing_items_js_bookmarks_and_dedupes_nav(tmp_path
         """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
 <manifest>
 <item id="js" href="Misc/note.js" media-type="application/xhtml+xml"/>
+<item id="provider" href="Misc/Provider.txt" media-type="text/plain"/>
 <item id="bookmark" href="../META-INF/calibre_bookmarks.txt" media-type="text/plain"/>
 <item id="missing" href="Images/missing.jpg" media-type="image/jpeg"/>
 <item id="nav1" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
 <item id="nav2" href="othernav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
 </manifest>
-<spine><itemref idref="missing"/><itemref idref="js"/><itemref idref="bookmark"/></spine>
+<spine><itemref idref="missing"/><itemref idref="js"/><itemref idref="provider"/><itemref idref="bookmark"/></spine>
 </package>""",
         encoding="utf-8",
     )
@@ -1659,8 +1700,11 @@ def test_cleanup_opf_removes_missing_items_js_bookmarks_and_dedupes_nav(tmp_path
     assert 'idref="missing"' not in data
     assert 'id="js"' not in data
     assert 'idref="js"' not in data
+    assert 'Provider.txt' not in data
+    assert 'idref="provider"' not in data
     assert 'calibre_bookmarks.txt' not in data
     assert not (tmp_path / "OEBPS" / "Misc" / "note.js").exists()
+    assert not (tmp_path / "OEBPS" / "Misc" / "Provider.txt").exists()
     assert not (tmp_path / "META-INF" / "calibre_bookmarks.txt").exists()
     assert data.count('properties="nav"') == 1
 
