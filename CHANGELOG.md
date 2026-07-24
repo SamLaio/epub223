@@ -1,5 +1,9 @@
 # Change Log
 
+## 2026-07-24
+
+- OPF metadata 清理會將既有 `dc:language` 的底線語言碼正規化為合法 BCP 47 格式，例如 `zh_TW` 會改成 `zh-TW`，避免 EPUB2 轉 EPUB3 後觸發 EPUBCheck `OPF-092`。
+
 ## 2026-07-18
 
 - 簡轉正 `--convert-chinese s2tw` 參考 `Hopkins1/TradSimpChinese` 的 quotation marks 做法，新增西式彎引號 `“”‘’` 到臺灣正體直角引號 `「」『』` 的直接對照轉換；仍只處理可讀文字與文字屬性，不改 `href`、`src`、`id`、CSS、URL 或 script/style 內容。

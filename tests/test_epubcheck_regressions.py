@@ -31,6 +31,7 @@ from epub3itizer.conversion import (  # noqa: E402
     sanitize_all_css_files,
     sanitize_css,
     sync_ncx_uid,
+    normalize_language_tag,
 )
 from epub3itizer.chinese import convert_chinese_document, to_traditional  # noqa: E402
 from epub3itizer.cli import parse_args  # noqa: E402
@@ -2140,3 +2141,32 @@ def test_cleanup_opf_removes_nav_itemref_even_when_id_is_toc(tmp_path):
     data = opf.read_text(encoding="utf-8")
     assert 'idref="chapter"' in data
     assert 'idref="toc"' not in data
+
+
+def test_language_tag_underscore_is_normalized():
+    assert normalize_language_tag("zh_TW") == "zh-TW"
+    assert normalize_language_tag("zh_Hant") == "zh-Hant"
+
+
+def test_cleanup_opf_normalizes_existing_dc_language(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>Sample</dc:title>
+<dc:language>zh_TW</dc:language>
+<dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+</metadata>
+<manifest><item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="chapter"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert "<dc:language>zh-TW</dc:language>" in data
+    assert "zh_TW" not in data

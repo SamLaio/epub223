@@ -141,6 +141,8 @@ java -jar "C:\PortableApps\[epub] epubCheck\epubcheck.jar" "D:\project\epub223\t
 
 本專案目前已實測輸出可通過 `epubCheck`，顯示 `0 errors / 0 warnings`。
 
+修復流程會正規化 OPF metadata 裡的語言碼，例如把 `zh_TW` 改成合法的 `zh-TW`，避免 EPUBCheck 回報 `OPF-092`。
+
 ## 修復參考來源
 
 當轉換結果無法通過 `epubCheck`，本專案會優先把可泛化的修復寫成

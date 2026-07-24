@@ -422,7 +422,7 @@ def sanitize_style_value(value: str) -> str:
 
 
 def normalize_language_tag(value: str) -> str:
-    value = (value or "").strip().replace("—", "-").replace("–", "-").replace("－", "-")
+    value = (value or "").strip().replace("—", "-").replace("–", "-").replace("－", "-").replace("_", "-")
     if not value:
         return "zh-Hant"
     if re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", value):
@@ -2461,6 +2461,12 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         title.text = "Untitled"
         changed = True
     languages = list(metadata.findall(f"{{{DC_NS}}}language"))
+    for language in languages:
+        original = (language.text or "").strip()
+        normalized = normalize_language_tag(original)
+        if original != normalized:
+            language.text = normalized
+            changed = True
     if not any((language.text or "").strip() for language in languages):
         language = languages[0] if languages else etree.SubElement(metadata, f"{{{DC_NS}}}language")
         language.text = "zh-Hant"
