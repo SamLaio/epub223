@@ -55,6 +55,7 @@ HTML5_DIMENSION_ELEMENTS = {"canvas", "embed", "iframe", "img", "input", "object
 JAVASCRIPT_MEDIA_TYPES = {"application/javascript", "application/ecmascript", "text/javascript", "text/ecmascript"}
 CALIBRE_BOOKMARKS = {"meta-inf/calibre_bookmarks.txt"}
 PRIVATE_RESIDUE_FILENAMES = {"provider.txt"}
+PRIVATE_CSS_PROPERTIES = {"duokan-text-indent"}
 LIST_CONTAINER_ELEMENTS = {"menu", "ol", "ul"}
 FOREIGN_IMAGE_SUFFIXES = {".emf", ".wmf"}
 PHRASING_PARENT_ELEMENTS = {
@@ -395,11 +396,11 @@ def append_style(elem: etree._Element, declaration: str) -> None:
     style = elem.get("style", "").strip()
     if style and not style.endswith(";"):
         style += ";"
-    elem.set("style", (style + " " + declaration).strip())
+    elem.set("style", sanitize_style_value((style + " " + declaration).strip()))
 
 
-def sanitize_style_value(value: str) -> str:
-    parts: List[str] = []
+def dedupe_css_declaration_list(value: str) -> str:
+    declarations: dict[str, Tuple[str, str]] = {}
     for decl in value.split(";"):
         decl = decl.strip()
         if not decl:
@@ -412,13 +413,45 @@ def sanitize_style_value(value: str) -> str:
         prop = prop.strip()
         if not re.fullmatch(r"-?[A-Za-z][A-Za-z0-9_-]*", prop):
             continue
+        if prop.lower() in PRIVATE_CSS_PROPERTIES:
+            continue
         val = val.strip()
         if not val:
             continue
         if re.search(r"url\(\s*(['\"]?)(?:https?://|file:|res:/)[^)]+\)", val, flags=re.IGNORECASE):
             continue
-        parts.append("%s: %s" % (prop, val))
-    return "; ".join(parts)
+        declarations[prop.lower()] = (prop, val)
+    return "; ".join("%s: %s" % (prop, val) for prop, val in declarations.values())
+
+
+def sanitize_style_value(value: str) -> str:
+    return dedupe_css_declaration_list(value)
+
+
+def dedupe_css_rule_block(value: str) -> str:
+    seen: set[str] = set()
+    duplicate_found = False
+    declarations: dict[str, Tuple[str, str]] = {}
+    for decl in value.split(";"):
+        decl = decl.strip()
+        if not decl or ":" not in decl:
+            continue
+        prop, val = decl.split(":", 1)
+        prop = prop.strip()
+        if not re.fullmatch(r"-?[A-Za-z][A-Za-z0-9_-]*", prop):
+            continue
+        if prop.lower() in PRIVATE_CSS_PROPERTIES:
+            continue
+        key = prop.lower()
+        if key in seen:
+            duplicate_found = True
+        seen.add(key)
+        val = val.strip()
+        if val:
+            declarations[key] = (prop, val)
+    if not duplicate_found:
+        return value
+    return " " + "; ".join("%s: %s" % (prop, val) for prop, val in declarations.values()) + "; "
 
 
 def normalize_language_tag(value: str) -> str:
@@ -1024,11 +1057,128 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
                     parent.remove(elem)
 
 
+SOURCE_AD_PATTERNS = [
+    re.compile(r"qinkan\.net", re.IGNORECASE),
+    re.compile(r"(?:請|请)看小(?:說|说)(?:網|网)", re.IGNORECASE),
+]
+
+YANQINGTU_AD_PATTERNS = [
+    re.compile(r"yanqingtu\.com", re.IGNORECASE),
+    re.compile(r"言情兔", re.IGNORECASE),
+]
+
+SOURCE_AD_INLINE_PATTERNS = [
+    re.compile(
+        r"[\[\［【（(]?\s*(?:www\.)?qinkan\.net\s*(?:請|请)看小(?:說|说)(?:網|网)\s*[\]\］】）)]?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"[\[\［【（(]?\s*(?:請|请)看小(?:說|说)(?:網|网)[·・\s]*(?:電子|电子)書下載樂園[—\-－\s]*w[ｗwＷW]{2}\.[qQＱ][iIＩ][sSＳ][uUＵ][uUＵ]\.[cCＣ][oOＯ][mMＭ]\s*[\]\］】）)]?",
+        re.IGNORECASE,
+    ),
+]
+
+
+def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
+    def is_known_source_ad_text(text: str) -> bool:
+        if len(text) <= 500:
+            has_qinkan_pitch = "更多精彩" in text or "更多好書" in text or "更多好书" in text
+            if has_qinkan_pitch and any(pattern.search(text) for pattern in SOURCE_AD_PATTERNS):
+                return True
+        if len(text) <= 900 and any(pattern.search(text) for pattern in YANQINGTU_AD_PATTERNS):
+            yanqingtu_pitch_words = [
+                "更多精彩",
+                "免費下載",
+                "免费下载",
+                "下載24小時",
+                "下载24小时",
+                "購買正版",
+                "购买正版",
+                "僅用於",
+                "仅用于",
+            ]
+            return any(word in text for word in yanqingtu_pitch_words)
+        return False
+
+    ns = {"x": XHTML_NS}
+    for elem in list(root.xpath(".//x:p | .//x:div | .//x:span", namespaces=ns)):
+        text = "".join(elem.itertext()).strip()
+        if not is_known_source_ad_text(text):
+            continue
+        parent = elem.getparent()
+        if parent is None:
+            continue
+        previous = elem.getprevious()
+        tail = elem.tail
+        if tail:
+            if previous is not None:
+                previous.tail = (previous.tail or "") + tail
+            else:
+                parent.text = (parent.text or "") + tail
+        parent.remove(elem)
+
+
+def remove_known_inline_source_ads(root: etree._Element) -> None:
+    def clean(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return value
+        cleaned = value
+        for pattern in SOURCE_AD_INLINE_PATTERNS:
+            cleaned = pattern.sub("", cleaned)
+        return cleaned
+
+    for elem in root.iter():
+        elem.text = clean(elem.text)
+        elem.tail = clean(elem.tail)
+
+
+def normalize_empty_definition_list_toc(root: etree._Element) -> None:
+    ns = {"x": XHTML_NS}
+    for dl in list(root.xpath(".//x:dl", namespaces=ns)):
+        children = [child for child in dl if isinstance(child.tag, str)]
+        if len(children) < 6:
+            continue
+        dt_nodes = [child for child in children if etree.QName(child).localname == "dt"]
+        dd_nodes = [child for child in children if etree.QName(child).localname == "dd"]
+        if len(dt_nodes) < 3 or len(dt_nodes) != len(dd_nodes):
+            continue
+        if not all(etree.QName(children[index]).localname == ("dt" if index % 2 == 0 else "dd") for index in range(len(children))):
+            continue
+        if not all(dd.text is None and not len(dd) for dd in dd_nodes):
+            continue
+        if not all(dt.xpath(".//*[local-name()='a'][@href]") for dt in dt_nodes):
+            continue
+
+        ol = etree.Element(f"{{{XHTML_NS}}}ol")
+        css_class = dl.get("class")
+        if css_class:
+            ol.set("class", css_class)
+        for dt in dt_nodes:
+            li = etree.SubElement(ol, f"{{{XHTML_NS}}}li")
+            for attr, value in dt.attrib.items():
+                if attr != "class":
+                    li.set(attr, value)
+            if dt.get("class"):
+                li.set("class", dt.get("class", ""))
+            li.text = dt.text
+            for child in list(dt):
+                dt.remove(child)
+                li.append(child)
+            li.tail = dt.tail
+        parent = dl.getparent()
+        if parent is not None:
+            ol.tail = dl.tail
+            parent.replace(dl, ol)
+
+
 def collect_doc_features(root: etree._Element, book_href: str) -> Tuple[str, List[str], List[str], List[Tuple[str, str, str]]]:
     ns = {"x": XHTML_NS, "epub": EPUB_NS}
     root = ensure_xhtml_document_namespace(root)
 
     normalize_epubcheck_xhtml(root, book_href)
+    remove_known_inline_source_ads(root)
+    remove_known_source_ad_paragraphs(root)
+    normalize_empty_definition_list_toc(root)
 
     # Some EPUB2 HTML TOCs use <dl>/<dt> only, which becomes invalid under
     # EPUB3/HTML5 validation. Normalize those into a simple unordered list.
@@ -1288,7 +1438,14 @@ def sanitize_css(data: str) -> str:
         previous = data
         data = re.sub(r"(?im)(font-family\s*:\s*[^;\n{}]+);(?=\s*[^:\n{};]+;)", r"\1,", data)
     data = re.sub(r"(?i)(?<=[{;])\s*direction\s*:\s*[^;{}]+;?", "", data)
+    data = re.sub(r"(?i)(?<=[{;])\s*duokan-text-indent\s*:\s*[^;{}]+;?", "", data)
     data = re.sub(r"(?i)(?<=[{;])\s*text-combine-horizontal\s*:\s*all\s*;?", "", data)
+    data = re.sub(r"(?i)(?<=[{;])\s*text-combine\s*:\s*horizontal\s*;?", "", data)
+    data = re.sub(
+        r"(?i)\b(margin|padding|border)\s+(top|right|bottom|left)\s*:",
+        lambda match: f"{match.group(1)}-{match.group(2)}:",
+        data,
+    )
     data = re.sub(r"(?<=[{;])\s*\*([-\w]+\s*:)", r"\1", data)
     data = re.sub(r"(?s)(^|})\s*(?:[-\w]+\s*:\s*[^;{}]+;\s*)+\}\s*", r"\1", data)
     if "{" not in data:
@@ -1311,6 +1468,7 @@ def sanitize_css(data: str) -> str:
     data = re.sub(r"url\(\s*(['\"]?)(?:file:|res:/)[^)]+\)", "none", data, flags=re.IGNORECASE)
     data = re.sub(r"(^|\})\s*([^{}\n]+?)\s+\d+\s*\{", lambda m: "%s\n%s {" % (m.group(1), m.group(2).strip()), data)
     data = re.sub(r"(?m)(;\s*\n)(\s*[.#A-Za-z][^{}\n]+\{)", r"\1}\n\2", data)
+    data = re.sub(r"\{([^{}]*)\}", lambda m: "{%s}" % dedupe_css_rule_block(m.group(1)), data)
     balanced: List[str] = []
     depth = 0
     for ch in data:
@@ -1780,6 +1938,121 @@ def strip_links_from_legacy_toc_files(root_dir: Path, opf_href: str) -> None:
             )
 
 
+def flatten_pathological_single_chain_nav(root: etree._Element) -> bool:
+    changed = False
+    for nav in root.xpath(".//*[local-name()='nav']"):
+        ol = next(
+            (child for child in nav if isinstance(child.tag, str) and etree.QName(child).localname == "ol"),
+            None,
+        )
+        if ol is None:
+            continue
+        direct_lis = [child for child in ol if isinstance(child.tag, str) and etree.QName(child).localname == "li"]
+        if len(direct_lis) != 1:
+            continue
+
+        chain: List[etree._Element] = []
+        current = direct_lis[0]
+        while True:
+            anchors = [
+                child
+                for child in current
+                if isinstance(child.tag, str) and etree.QName(child).localname == "a" and child.get("href")
+            ]
+            child_ols = [
+                child
+                for child in current
+                if isinstance(child.tag, str) and etree.QName(child).localname == "ol"
+            ]
+            if len(anchors) != 1:
+                break
+            chain.append(current)
+            if len(child_ols) != 1:
+                break
+            child_lis = [
+                child
+                for child in child_ols[0]
+                if isinstance(child.tag, str) and etree.QName(child).localname == "li"
+            ]
+            if not child_lis:
+                break
+            if len(child_lis) > 1:
+                chain.extend(child_lis)
+                break
+            current = child_lis[0]
+
+        anchors = [
+            anchor
+            for li in chain
+            for anchor in li
+            if isinstance(anchor.tag, str) and etree.QName(anchor).localname == "a" and anchor.get("href")
+        ]
+        if len(anchors) < 5:
+            continue
+        hrefs = [anchor.get("href", "") for anchor in anchors]
+        if not all(re.search(r"chapter\d+\.(?:xhtml|html?)$", strip_fragment(href), re.IGNORECASE) for href in hrefs):
+            continue
+
+        new_ol = etree.Element(ol.tag, ol.attrib)
+        for old_li in chain:
+            anchor = next(
+                child
+                for child in old_li
+                if isinstance(child.tag, str) and etree.QName(child).localname == "a" and child.get("href")
+            )
+            li = etree.SubElement(new_ol, old_li.tag)
+            for attr, value in old_li.attrib.items():
+                li.set(attr, value)
+            old_li.remove(anchor)
+            li.append(anchor)
+        nav.replace(ol, new_ol)
+        changed = True
+    return changed
+
+
+def ensure_official_nav_has_toc(root: etree._Element) -> bool:
+    body = next(
+        (elem for elem in root.xpath(".//*[local-name()='body']") if isinstance(elem.tag, str)),
+        None,
+    )
+    if body is None:
+        return False
+    existing_toc = root.xpath(
+        ".//*[local-name()='nav' and contains(concat(' ', normalize-space(@epub:type), ' '), ' toc ')]",
+        namespaces={"epub": EPUB_NS},
+    )
+    if existing_toc:
+        return False
+
+    body_children = [child for child in body if isinstance(child.tag, str)]
+    if not body_children:
+        return False
+
+    source_children = body_children
+    if len(body_children) == 1 and etree.QName(body_children[0]).localname in {"div", "section"}:
+        inner_children = [child for child in body_children[0] if isinstance(child.tag, str)]
+        if inner_children:
+            source_children = inner_children
+
+    if not any(etree.QName(child).localname in LIST_CONTAINER_ELEMENTS for child in source_children):
+        return False
+
+    nav = etree.Element(f"{{{XHTML_NS}}}nav")
+    nav.set(f"{{{EPUB_NS}}}type", "toc")
+    nav.set("id", "toc")
+    for child in source_children:
+        parent = child.getparent()
+        if parent is not None:
+            parent.remove(child)
+        nav.append(child)
+    for item in nav.xpath(".//*[local-name()='ul' or local-name()='menu']"):
+        item.tag = f"{{{XHTML_NS}}}ol"
+    for child in list(body):
+        body.remove(child)
+    body.append(nav)
+    return True
+
+
 def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
     opf_path = root_dir / Path(opf_href)
     if not opf_path.exists():
@@ -1803,7 +2076,8 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
         root = parse_xml_recovering(read_text_file(nav_path))
     except Exception:
         return
-    changed = False
+    changed = ensure_official_nav_has_toc(root)
+    changed = flatten_pathological_single_chain_nav(root) or changed
     manifest_hrefs: Dict[str, str] = {}
     for item in opf_root.xpath(".//*[local-name()='manifest']/*[local-name()='item']"):
         item_id = item.get("id", "")
@@ -1868,7 +2142,7 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
                 for index in [nav_target_spine_index(anchor.get("href", ""))]
                 if index is not None
             ]
-            if child_indices and parent_index <= min(child_indices):
+            if child_indices and parent_index >= min(child_indices):
                 direct_anchor.attrib.pop("href", None)
                 direct_anchor.tag = f"{{{XHTML_NS}}}span"
                 changed = True
@@ -2406,6 +2680,27 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         if meta.get("scheme") is not None:
             meta.attrib.pop("scheme", None)
             changed = True
+    used_xml_ids = {item_id for item_id in manifest_ids if item_id}
+    metadata_id_renames: Dict[str, str] = {}
+    for elem in metadata.xpath(".//*[@id]"):
+        if not isinstance(elem.tag, str):
+            continue
+        elem_id = elem.get("id", "")
+        if not elem_id:
+            continue
+        if elem_id in used_xml_ids or not XML_ID_RE.match(elem_id):
+            new_id = make_xml_id("meta-%s" % (elem_id or "id"), used_xml_ids)
+            metadata_id_renames[elem_id] = new_id
+            elem.set("id", new_id)
+            changed = True
+        else:
+            used_xml_ids.add(elem_id)
+    if metadata_id_renames:
+        for meta in metadata.xpath(".//*[local-name()='meta' and @refines]"):
+            refines = meta.get("refines", "")
+            if refines.startswith("#") and refines[1:] in metadata_id_renames:
+                meta.set("refines", "#" + metadata_id_renames[refines[1:]])
+                changed = True
     metadata_ids = {
         elem.get("id")
         for elem in metadata.xpath(".//*[@id]")

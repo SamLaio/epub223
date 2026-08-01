@@ -22,6 +22,7 @@ from epub3itizer.conversion import (  # noqa: E402
     filter_guide_to_spine,
     filter_toc_to_spine,
     fix_case_mismatched_local_hrefs,
+    flatten_pathological_single_chain_nav,
     normalize_all_xhtml_files,
     normalize_ncx_play_order,
     parse_ncx_file,
@@ -30,6 +31,7 @@ from epub3itizer.conversion import (  # noqa: E402
     repair_missing_xhtml_references,
     sanitize_all_css_files,
     sanitize_css,
+    sanitize_style_value,
     sync_ncx_uid,
     normalize_language_tag,
 )
@@ -162,7 +164,7 @@ def test_convert_chinese_cli_option_is_explicit():
 
 
 def test_to_traditional_uses_opencc_and_custom_replacements():
-    assert to_traditional("“汉字” ‘中国’ 实时") == "「漢字」 『中國』 即時"
+    assert to_traditional("“汉字” ‘中国’ 实时 信息") == "「漢字」 『中國』 即時 資訊"
 
 
 def test_empty_xhtml_title_is_filled_from_href():
@@ -176,6 +178,116 @@ def test_empty_xhtml_title_is_filled_from_href():
     output, _, _, _ = collect_doc_features(root, "Text/chapter01.xhtml")
 
     assert "<title>chapter01.xhtml</title>" in output
+
+
+def test_known_source_ad_paragraph_is_removed():
+    root = etree.fromstring(
+        """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Title</title></head>
+<body>
+<p>這一段是正文，更多精彩也可能只是正常語句。</p>
+<p class="a">更多精彩，更多好書，盡在請看小說網http://Www.qinkan.net</p>
+<p>下一段正文。</p>
+</body>
+</html>""".encode("utf-8")
+    )
+
+    output, _, _, _ = collect_doc_features(root, "Text/chapter01.xhtml")
+
+    assert "qinkan.net" not in output
+    assert "請看小說網" not in output
+    assert "這一段是正文" in output
+    assert "下一段正文" in output
+
+
+def test_yanqingtu_source_ad_paragraphs_are_removed():
+    root = etree.fromstring(
+        """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Title</title></head>
+<body>
+<p>正文也可能提到更多精彩，不應該被刪。</p>
+<p>聲明：EPUB電子書內容由言情兔(yanqingtu.com)網友整理分享，下載24小時內刪除，請購買正版閱讀。</p>
+<p>《獵愛狂夫》全本完結，更多精彩言情小說請訪問言情兔<span>www.yanqingtu.com</span>免費下載。</p>
+<p>下一段正文。</p>
+</body>
+</html>""".encode("utf-8")
+    )
+
+    output, _, _, _ = collect_doc_features(root, "Text/chapter01.xhtml")
+
+    assert "yanqingtu.com" not in output
+    assert "言情兔" not in output
+    assert "正版閱讀" not in output
+    assert "正文也可能提到更多精彩" in output
+    assert "下一段正文" in output
+
+
+def test_known_inline_source_ads_are_removed_without_dropping_text():
+    root = etree.fromstring(
+        """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Title</title></head>
+<body>
+<p>三老[www.qinkan.net請看小說網]爺去也得去。</p>
+<p>那些[請看小說網·電子書下載樂園—wＷw.QiＳuu.cＯm］伺候的人。</p>
+</body>
+</html>""".encode("utf-8")
+    )
+
+    output, _, _, _ = collect_doc_features(root, "Text/chapter01.xhtml")
+
+    assert "qinkan.net" not in output
+    assert "請看小說網" not in output
+    assert "QiＳuu" not in output
+    assert "三老爺去也得去" in output
+    assert "那些伺候的人" in output
+
+
+def test_empty_definition_list_toc_becomes_ordered_list():
+    root = etree.fromstring(
+        """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Table Of Contents</title></head>
+<body>
+<div class="toc"><dl class="toc">
+<dt class="tocl2"><a href="chapter0001.xhtml">第一章</a></dt><dd></dd>
+<dt class="tocl2"><a href="chapter0002.xhtml">第二章</a></dt><dd></dd>
+<dt class="tocl2"><a href="chapter0003.xhtml">第三章</a></dt><dd></dd>
+</dl></div>
+</body>
+</html>""".encode("utf-8")
+    )
+
+    output, _, _, _ = collect_doc_features(root, "Text/book-toc.xhtml")
+
+    assert "<dl" not in output
+    assert "<dd" not in output
+    assert "<ol" in output
+    assert output.count("<li") == 3
+    assert 'href="chapter0001.xhtml"' in output
+
+
+def test_pathological_single_chain_nav_is_flattened():
+    root = etree.fromstring(
+        """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Nav</title></head>
+<body><nav epub:type="toc"><ol>
+<li><a href="chapter0001.xhtml">第一章</a><ol>
+<li><a href="chapter0002.xhtml">第二章</a><ol>
+<li><a href="chapter0003.xhtml">第三章</a><ol>
+<li><a href="chapter0004.xhtml">第四章</a><ol>
+<li><a href="chapter0005.xhtml">第五章</a></li>
+<li><a href="chapter0006.xhtml">第六章</a></li>
+</ol></li></ol></li></ol></li></ol></li>
+</ol></nav></body></html>""".encode("utf-8")
+    )
+
+    changed = flatten_pathological_single_chain_nav(root)
+    output = etree.tostring(root, encoding="unicode")
+
+    assert changed is True
+    assert output.count("<ol") == 1
+    assert output.count("<li") == 6
+    assert 'href="chapter0001.xhtml"' in output
+    assert 'href="chapter0006.xhtml"' in output
 
 
 def test_abnormal_namespace_declarations_are_sanitized_for_xhtml():
@@ -698,6 +810,45 @@ def test_nav_parent_anchor_before_child_links_is_demoted(tmp_path):
     assert 'href="index_split_000.html">第1章</a>' not in output
     assert 'href="index_split_000.html#page_5"' in output
     assert 'href="index_split_001.html#page_148"' in output
+
+
+def test_nav_parent_anchor_after_earlier_child_links_is_demoted(tmp_path):
+    (tmp_path / "Text").mkdir()
+    (tmp_path / "content.opf").write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:language>zh-Hant</dc:language><dc:identifier id="uid">urn:uuid:x</dc:identifier></metadata>
+<manifest>
+<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+<item id="chap1" href="Text/chapter_136.html" media-type="application/xhtml+xml"/>
+<item id="chap2" href="Text/chapter_137.html" media-type="application/xhtml+xml"/>
+<item id="chap3" href="Text/chapter_140.html" media-type="application/xhtml+xml"/>
+</manifest>
+<spine><itemref idref="chap1"/><itemref idref="chap2"/><itemref idref="chap3"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "nav.xhtml").write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>nav</title></head><body><nav epub:type="toc"><ol><li>
+<a href="Text/chapter_140.html">卷標題</a>
+<ol>
+<li><a href="Text/chapter_136.html">第137章</a></li>
+<li><a href="Text/chapter_137.html">第138章</a></li>
+<li><a href="Text/chapter_140.html">第141章</a></li>
+</ol>
+</li></ol></nav></body></html>""",
+        encoding="utf-8",
+    )
+
+    cleanup_nav_leaf_spans(tmp_path, "content.opf")
+    output = (tmp_path / "nav.xhtml").read_text(encoding="utf-8")
+
+    assert "<span>卷標題</span>" in output
+    assert 'href="Text/chapter_140.html">卷標題</a>' not in output
+    assert 'href="Text/chapter_136.html"' in output
+    assert 'href="Text/chapter_137.html"' in output
+    assert 'href="Text/chapter_140.html">第141章</a>' in output
 
 
 def test_invalid_body_metadata_and_list_items_are_normalized():
@@ -1710,6 +1861,63 @@ def test_cleanup_opf_removes_missing_items_js_bookmarks_and_dedupes_nav(tmp_path
     assert data.count('properties="nav"') == 1
 
 
+def test_cleanup_opf_renames_metadata_id_conflicting_with_manifest(tmp_path):
+    (tmp_path / "OEBPS").mkdir()
+    (tmp_path / "OEBPS" / "title.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0" unique-identifier="bookid">
+<metadata>
+<dc:title id="title">書名</dc:title>
+<meta refines="#title" property="title-type">main</meta>
+<dc:language>zh-Hant</dc:language>
+<dc:identifier id="bookid">urn:uuid:x</dc:identifier>
+<meta property="dcterms:modified">2026-08-01T00:00:00Z</meta>
+</metadata>
+<manifest><item id="title" href="title.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="title"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+    output = opf.read_text(encoding="utf-8")
+
+    assert 'item id="title"' in output
+    assert 'dc:title id="meta-title"' in output
+    assert 'refines="#meta-title"' in output
+    assert output.count('id="title"') == 1
+
+
+def test_cleanup_nav_wraps_plain_toc_list_in_epub_nav(tmp_path):
+    (tmp_path / "EPUB").mkdir()
+    (tmp_path / "EPUB" / "chap_001.xhtml").write_text("<html/>", encoding="utf-8")
+    (tmp_path / "EPUB" / "content.opf").write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<manifest>
+<item id="toc" href="toc.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+<item id="chap1" href="chap_001.xhtml" media-type="application/xhtml+xml"/>
+</manifest>
+<spine><itemref idref="chap1"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "EPUB" / "toc.xhtml").write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>目錄</title></head>
+<body><div class="toc"><h1>目錄</h1><ul><li><a href="chap_001.xhtml">第一章</a></li></ul></div></body>
+</html>""",
+        encoding="utf-8",
+    )
+
+    cleanup_nav_leaf_spans(tmp_path, "EPUB/content.opf")
+
+    output = (tmp_path / "EPUB" / "toc.xhtml").read_text(encoding="utf-8")
+    assert output.count('epub:type="toc"') == 1
+    assert "<ol>" in output
+    assert "<ul>" not in output
+
+
 def test_cleanup_opf_applies_calibre_style_structural_fixes(tmp_path):
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Text" / "a.xhtml").write_text("<html/>", encoding="utf-8")
@@ -2009,13 +2217,83 @@ def test_css_text_combine_horizontal_all_is_removed():
         """.tcy {
     writing-mode: vertical-rl;
     text-combine-horizontal: all;
+    text-combine: horizontal;
     text-align: center;
 }"""
     )
 
     assert "text-combine-horizontal" not in output
+    assert "text-combine:" not in output
     assert "writing-mode: vertical-rl" in output
     assert "text-align: center" in output
+
+
+def test_css_duokan_text_indent_is_removed():
+    output = sanitize_css(
+        """.chapter {
+    duokan-text-indent: 0;
+    text-indent: 2em;
+}"""
+    )
+
+    assert "duokan-text-indent" not in output
+    assert "text-indent: 2em" in output
+
+
+def test_css_directional_properties_with_spaces_are_hyphenated():
+    output = sanitize_css(
+        """h1 {
+    padding top: 1cm;
+    padding bottom: 1cm;
+    margin left: 2em;
+    border right: 1px solid black;
+}"""
+    )
+
+    assert "padding-top: 1cm" in output
+    assert "padding-bottom: 1cm" in output
+    assert "margin-left: 2em" in output
+    assert "border-right: 1px solid black" in output
+    assert "padding top" not in output
+    assert "padding bottom" not in output
+
+
+def test_inline_style_duplicate_properties_keep_last_value():
+    output = sanitize_style_value(
+        "font-weight: normal; border-top: 1px solid black; font-weight: bold; "
+        "border-top: none; border-bottom: 1px solid black; border-bottom: none"
+    )
+
+    assert output.count("font-weight") == 1
+    assert output.count("border-top") == 1
+    assert output.count("border-bottom") == 1
+    assert "font-weight: bold" in output
+    assert "border-top: none" in output
+    assert "border-bottom: none" in output
+
+
+def test_inline_style_duokan_text_indent_is_removed():
+    output = sanitize_style_value("duokan-text-indent: 0; text-indent: 2em; color: black")
+
+    assert "duokan-text-indent" not in output
+    assert "text-indent: 2em" in output
+    assert "color: black" in output
+
+
+def test_css_duplicate_properties_keep_last_value_in_rule_blocks():
+    output = sanitize_css(
+        """.dupe {
+    font-weight: normal;
+    font-weight: bold;
+    border-left: 1px solid black;
+    border-left: none;
+}"""
+    )
+
+    assert output.count("font-weight") == 1
+    assert output.count("border-left") == 1
+    assert "font-weight: bold" in output
+    assert "border-left: none" in output
 
 
 def test_css_fullwidth_percent_is_normalized():

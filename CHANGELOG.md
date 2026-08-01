@@ -1,5 +1,25 @@
 # Change Log
 
+## 2026-08-01
+
+- OPF 清理新增 metadata/manifest XML id 衝突修復：manifest 與 spine 使用中的資源 id 會優先保留，metadata 中撞名的 `id` 會改為 `meta-...`，並同步 metadata 內 `refines`，避免 EPUBCheck 回報 `Duplicate "title"` 等錯誤。
+
+## 2026-07-26
+
+- 官方 nav 的 `NAV-011` 修復更正父層目錄判斷：若父層連結目標晚於子項目中的最早 spine 位置，會把父層連結降級為純文字，保留子章節連結，避免 Send to Kindle 或 EPUBCheck 因目錄閱讀順序倒退而拒絕或警告。
+- 簡轉正 `--convert-chinese s2tw` 改為優先使用 `D:\github\zhTranslate` 共用文字轉換層，避免 `epub223`、`metaFinder` 各自維護重複自訂詞表；EPUB 結構安全仍由 `epub223` 控制，只轉換可讀文字與允許的文字屬性。
+- 官方 nav 修復新增處理只有一般 `<div><ul>` 目錄、卻在 OPF manifest 標為 `properties="nav"` 的 EPUB3 檔案；修復時會補成唯一的 `<nav epub:type="toc">` 並把 `ul/menu` 轉為 `ol`，避免 EPUBCheck 回報 `Exactly one "toc" nav element must be present`。
+- CSS sanitizer 新增移除多看私有 `duokan-text-indent` 宣告，包含一般 CSS 規則與 XHTML inline style，避免 `duokan-text-indent: 0;` 殘留到 EPUB3。
+- CSS sanitizer 新增修復方向屬性中把連字號誤寫成空格的情況，例如 `padding top:`、`padding bottom:` 會轉為 EPUBCheck 可解析的 `padding-top:`、`padding-bottom:`。
+- XHTML 清理新增移除 `言情兔` / `yanqingtu.com` 的來源廣告短段；規則需同時命中站台識別與下載、購買正版或更多精彩等廣告語，避免只因正文提到一般宣傳詞而誤刪。
+- XHTML 清理新增移除 `請看小說網` / `qinkan.net` 的來源廣告，包含短段落宣傳與正文中夾入的 `[www.qinkan.net請看小說網]`、`[請看小說網·電子書下載樂園—wＷw.QiＳuu.cＯm］` 類浮水印；段落刪除規則需同時命中「更多精彩 / 更多好書」與站台識別，避免誤刪一般正文。
+- TOC 修復新增處理製作器誤產生的目錄頁：會把大量空 `<dd/>` 的 `<dl><dt><a>章節</a></dt><dd/>` 目錄轉成正常 `<ol><li>`，也會將 `chapter0001 -> chapter0002 -> chapter0003` 這種錯誤單鏈巢狀 nav 攤平成同層章節清單，避免目錄前幾章被降級成不可點擊文字或顯示成不合理階層。
+
+## 2026-07-25
+
+- CSS sanitizer 新增移除 `text-combine: horizontal;`，與既有 `text-combine-horizontal: all;` 清理規則一併避免直排舊式合字宣告造成 EPUBCheck 或閱讀器相容性問題。
+- CSS sanitizer 新增清理重複 CSS 屬性宣告，包含 XHTML inline style 與一般 CSS 規則區塊；同名屬性依 CSS cascade 保留最後一次宣告，避免 Sigil 檢查書本回報 `Unexpected duplicate`。
+
 ## 2026-07-24
 
 - OPF metadata 清理會將既有 `dc:language` 的底線語言碼正規化為合法 BCP 47 格式，例如 `zh_TW` 會改成 `zh-TW`，避免 EPUB2 轉 EPUB3 後觸發 EPUBCheck `OPF-092`。

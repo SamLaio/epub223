@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Iterable
 
 from lxml import etree
 
 try:
-    from opencc import OpenCC
-except Exception:  # pragma: no cover - optional dependency
-    OpenCC = None
+    from s2tw_converter import Converter as ZhTranslateConverter
+except Exception:  # pragma: no cover - local integration fallback
+    zhtranslate_src = Path(r"D:\github\zhTranslate\src")
+    if zhtranslate_src.exists() and str(zhtranslate_src) not in sys.path:
+        sys.path.insert(0, str(zhtranslate_src))
+    try:
+        from s2tw_converter import Converter as ZhTranslateConverter
+    except Exception:
+        ZhTranslateConverter = None
 
 TEXT_SUFFIXES = {".html", ".htm", ".xhtml", ".opf", ".ncx", ".xml"}
 TEXT_ATTRS = {
@@ -20,46 +27,19 @@ TEXT_ATTRS = {
     "title",
 }
 SKIP_TEXT_ELEMENTS = {"script", "style"}
-CUSTOM_REPLACEMENTS_FILE = Path(__file__).with_name("custom_replacements.tsv")
-WESTERN_TO_EAST_ASIAN_QUOTES = str.maketrans({
-    "“": "「",
-    "”": "」",
-    "‘": "『",
-    "’": "』",
-})
 
 _converter = None
-
-
-def _load_custom_replacements() -> tuple[tuple[str, str], ...]:
-    if not CUSTOM_REPLACEMENTS_FILE.exists():
-        return ()
-    replacements: dict[str, str] = {}
-    with CUSTOM_REPLACEMENTS_FILE.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "\t" not in line:
-                continue
-            source, target = line.split("\t", 1)
-            source = source.strip()
-            target = target.strip().split()[0] if target.strip() else ""
-            if source and target:
-                replacements[source] = target
-    return tuple(sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True))
-
-
-CUSTOM_REPLACEMENTS = _load_custom_replacements()
 
 
 def _get_converter():
     global _converter
     if _converter is not None:
         return _converter
-    if OpenCC is None:
+    if ZhTranslateConverter is None:
         _converter = False
         return _converter
     try:
-        _converter = OpenCC("s2tw")
+        _converter = ZhTranslateConverter()
     except Exception:
         _converter = False
     return _converter
@@ -69,20 +49,11 @@ def to_traditional(text: str | None) -> str | None:
     if not text:
         return text
     converter = _get_converter()
-    converted = _apply_custom_replacements(text)
     if converter:
         try:
-            converted = converter.convert(converted)
+            return converter.convert(text)
         except Exception:
-            converted = text
-    converted = _apply_custom_replacements(converted)
-    converted = converted.translate(WESTERN_TO_EAST_ASIAN_QUOTES)
-    return converted
-
-
-def _apply_custom_replacements(text: str) -> str:
-    for old, new in CUSTOM_REPLACEMENTS:
-        text = text.replace(old, new)
+            pass
     return text
 
 

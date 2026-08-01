@@ -18,8 +18,12 @@
 - 轉換時保留原始資料夾結構
 - 可搭配 `epubCheck` 驗證輸出檔
 - 可選擇把 EPUB 內可讀文字從簡體中文轉成臺灣正體中文
-- 轉換與修復流程會清理常見閱讀器或平台殘留，例如 `calibre_bookmarks.txt`、`Provider.txt`，以及 EPUBCheck 不友善的 CSS 宣告如 `text-combine-horizontal: all;`
-- 修復流程會整理官方 `nav.xhtml`，例如把可能造成 `NAV-011` 閱讀順序警告的父層目錄連結降級為純文字；同一檔案內 fragment 後的裸連結會被降級並由既有空 leaf 清理移除，保留可判定順序的子章節連結
+- 轉換與修復流程會清理常見閱讀器或平台殘留，例如 `calibre_bookmarks.txt`、`Provider.txt`，以及 EPUBCheck 不友善或閱讀器私有的 CSS 宣告如 `text-combine-horizontal: all;`、`text-combine: horizontal;`、`duokan-text-indent: 0;`
+- XHTML 清理會移除少數明確來源廣告，例如 `請看小說網` / `qinkan.net`、`言情兔` / `yanqingtu.com` 宣傳短段與正文中的站台浮水印；段落規則需同時命中站台識別與廣告語，避免誤刪正文
+- 目錄頁修復會整理空 `<dd/>` 的舊式 `<dl>` 目錄、把官方 nav 檔中只有 `<div><ul>` 的普通目錄補成 EPUB3 需要的 `<nav epub:type="toc">`，並攤平製作器誤產生的單鏈巢狀 nav，讓章節維持可點擊且階層合理
+- CSS 清理會移除重複屬性宣告，例如重複的 `font-weight`、`border-top`、`border-bottom`、`border-left`、`border-right`；同名屬性保留最後一次宣告，以符合 CSS cascade 語意並降低 Sigil 檢查書本警告
+- 修復流程會整理官方 `nav.xhtml`，例如把可能造成 `NAV-011` 閱讀順序警告的父層目錄連結降級為純文字；父層若指到晚於子項目的 spine 位置，會保留子章節連結並移除父層 href；同一檔案內 fragment 後的裸連結會被降級並由既有空 leaf 清理移除，保留可判定順序的子章節連結
+- OPF 清理會保留 manifest/spine 使用中的資源 id，並將 metadata 中撞名的 `id` 改成安全名稱，避免 EPUBCheck 回報 `Duplicate "title"` 等 XML id 衝突
 
 ## 專案結構
 
@@ -78,10 +82,13 @@ python -m epub3itizer "D:\project\epub223\testFile\input.epub" -o "D:\project\ep
 這個選項會轉換 EPUB 內 XHTML、OPF、NCX、XML 的可讀文字與 `title`、`alt`、`content` 等文字屬性，但不會改 `href`、`src`、`id`、CSS、URL 或 script/style 內容。
 同時會參考 `Hopkins1/TradSimpChinese` 的引號處理方式，將西式彎引號 `“”‘’` 轉成臺灣正體常用的 `「」『』`。
 
-轉換邏輯沿用 `metaFinder` 的做法：
+轉換邏輯使用 `D:\github\zhTranslate` 共用文字轉換層：
 
-- 使用 `opencc-python-reimplemented` 的 `OpenCC("s2tw")`。
-- 套用 `epub3itizer/custom_replacements.tsv` 裡的專案自訂替換。
+- 使用 `zhTranslate` 的 `s2tw_converter.Converter`。
+- 套用 `D:\github\zhTranslate\src\s2tw_converter\custom_replacements.tsv` 裡的共用自訂替換。
+- 若尚未安裝 `zhTranslate`，程式會嘗試從 `D:\github\zhTranslate\src` 載入。
+
+EPUB 結構安全仍由 `epub223` 負責：只轉換可讀文字與允許的文字屬性，不會把整份 XHTML/XML 當純文字轉換。
 
 ### 單獨修復 EPUB
 
