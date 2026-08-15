@@ -18,7 +18,7 @@
 - 轉換時保留原始資料夾結構
 - 可搭配 `epubCheck` 驗證輸出檔
 - 可選擇把 EPUB 內可讀文字從簡體中文轉成臺灣正體中文
-- 轉換與修復流程會清理常見閱讀器或平台殘留，例如 `calibre_bookmarks.txt`、`Provider.txt`，以及 EPUBCheck 不友善或閱讀器私有的 CSS 宣告如 `text-combine-horizontal: all;`、`text-combine: horizontal;`、`duokan-text-indent: 0;`
+- 轉換與修復流程會清理常見閱讀器或平台殘留，例如 `calibre_bookmarks.txt`、`Provider.txt`，以及 EPUBCheck 不友善或閱讀器私有的 CSS 宣告如 `text-combine-horizontal: all;`、`text-combine: horizontal;`、`text-spacing-trim: trim-start;`、`duokan-text-indent: 0;`
 - XHTML 清理會移除少數明確來源廣告，例如 `請看小說網` / `qinkan.net`、`言情兔` / `yanqingtu.com` 宣傳短段與正文中的站台浮水印；段落規則需同時命中站台識別與廣告語，避免誤刪正文
 - 目錄頁修復會整理空 `<dd/>` 的舊式 `<dl>` 目錄、把官方 nav 檔中只有 `<div><ul>` 的普通目錄補成 EPUB3 需要的 `<nav epub:type="toc">`，並攤平製作器誤產生的單鏈巢狀 nav，讓章節維持可點擊且階層合理
 - CSS 清理會移除重複屬性宣告，例如重複的 `font-weight`、`border-top`、`border-bottom`、`border-left`、`border-right`；同名屬性保留最後一次宣告，以符合 CSS cascade 語意並降低 Sigil 檢查書本警告

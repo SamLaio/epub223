@@ -55,7 +55,7 @@ HTML5_DIMENSION_ELEMENTS = {"canvas", "embed", "iframe", "img", "input", "object
 JAVASCRIPT_MEDIA_TYPES = {"application/javascript", "application/ecmascript", "text/javascript", "text/ecmascript"}
 CALIBRE_BOOKMARKS = {"meta-inf/calibre_bookmarks.txt"}
 PRIVATE_RESIDUE_FILENAMES = {"provider.txt"}
-PRIVATE_CSS_PROPERTIES = {"duokan-text-indent"}
+PRIVATE_CSS_PROPERTIES = {"duokan-text-indent", "text-spacing-trim"}
 LIST_CONTAINER_ELEMENTS = {"menu", "ol", "ul"}
 FOREIGN_IMAGE_SUFFIXES = {".emf", ".wmf"}
 PHRASING_PARENT_ELEMENTS = {
@@ -116,6 +116,7 @@ XHTML_TAG_RENAMES = {
 SAFE_RENAMED_TAG_ATTRS = {"class", "id", "lang", "style", "title", "xml:lang"}
 HTML5_NAME_ELEMENTS = {"button", "fieldset", "form", "iframe", "input", "map", "meta", "object", "output", "param", "select", "textarea"}
 XML_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
+OPF_PROPERTY_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 DC_METADATA_ELEMENTS = {
     "contributor",
     "coverage",
@@ -183,6 +184,7 @@ _guide_epubtype_map = {
 }
 
 IS_NAMED_ENTITY = re.compile(r"(&\w+;)")
+IS_MISSING_SEMICOLON_ENTITY = re.compile(r"&([A-Za-z][A-Za-z0-9]+)(?=[\"'\s/>])")
 
 XML_PARSER = etree.XMLParser(
     remove_blank_text=False,
@@ -207,7 +209,15 @@ def convert_named_entities(text: str) -> str:
         sval = named_entities.get(piece[1:], "")
         if sval != "":
             pieces[i] = "&#%d;" % ord(sval)
-    return "".join(pieces)
+    text = "".join(pieces)
+
+    def replace_missing_semicolon(match: re.Match[str]) -> str:
+        sval = named_entities.get(match.group(1), "")
+        if not sval:
+            return match.group(0)
+        return "&#%d;" % ord(sval)
+
+    return IS_MISSING_SEMICOLON_ENTITY.sub(replace_missing_semicolon, text)
 
 
 def read_text_file(path: Path) -> str:
@@ -372,6 +382,12 @@ def sanitize_namespace_declarations(data: str) -> str:
 
 def parse_xml_recovering(data: str) -> etree._Element:
     data = sanitize_namespace_declarations(data)
+    if data.strip() and "<" not in data:
+        body = html.escape(data.strip())
+        data = (
+            f'<html xmlns="{XHTML_NS}"><head><title>Untitled</title></head>'
+            f"<body><p>{body}</p></body></html>"
+        )
     data = re.sub(r"<([\u3400-\u9fff][^<>\s/]*)\s*/>", r"&lt;\1/&gt;", data)
     try:
         return etree.fromstring(data.encode("utf-8"), XML_PARSER)
@@ -506,6 +522,41 @@ def normalize_element_ids(root: etree._Element) -> None:
             seen.add(value)
         else:
             elem.set("id", make_xml_id(value, seen))
+
+
+def append_text_in_place_of_element(elem: etree._Element, text: str) -> None:
+    parent = elem.getparent()
+    if parent is None:
+        return
+    replacement = text + "".join(elem.itertext()) + (elem.tail or "")
+    previous = elem.getprevious()
+    if previous is not None:
+        previous.tail = (previous.tail or "") + replacement
+    else:
+        parent.text = (parent.text or "") + replacement
+    parent.remove(elem)
+
+
+def suspicious_ocr_text_tag(elem: etree._Element, local: str) -> bool:
+    attrs = list(elem.attrib.items())
+    if len(attrs) < 8:
+        return False
+    empty_attrs = sum(1 for _name, value in attrs if not value)
+    if empty_attrs < len(attrs) * 0.8:
+        return False
+    if local in {"html", "head", "body", "p", "div", "span", "a", "img", "table", "tr", "td", "ol", "ul", "li"}:
+        return False
+    return True
+
+
+def ocr_text_from_fake_tag(elem: etree._Element, local: str) -> str:
+    words = [local]
+    for name, value in elem.attrib.items():
+        attr_name = etree.QName(name).localname if name.startswith("{") else name
+        words.append(attr_name)
+        if value:
+            words.append(value)
+    return " " + " ".join(word for word in words if word).strip()
 
 
 def wrap_body_bare_text(root: etree._Element) -> None:
@@ -792,6 +843,12 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
 
         parent = elem.getparent()
         parent_local = etree.QName(parent).localname if parent is not None and isinstance(parent.tag, str) else ""
+        if parent is not None and namespace == XHTML_NS and suspicious_ocr_text_tag(elem, local):
+            append_text_in_place_of_element(elem, ocr_text_from_fake_tag(elem, local))
+            continue
+        if namespace == XHTML_NS and local == "caption" and parent_local != "table":
+            elem.tag = f"{{{XHTML_NS}}}{'figcaption' if parent_local == 'figure' else 'div'}"
+            local = etree.QName(elem).localname
         if namespace == XHTML_NS and local in {"form", "button", "input", "select", "textarea"}:
             if parent is not None:
                 if elem.tail:
@@ -969,7 +1026,9 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
                 for ancestor in elem.iterancestors()
             )
             href_base = split_href(elem.get("href", ""))[0] if elem.get("href") else ""
-            if has_ancestor_anchor or not elem.get("href") or resource_kind(href_base) == "image":
+            links_to_nav_doc = posixpath.basename(unquote(href_base)).lower() in {"nav.xhtml", "nav.html"}
+            current_doc_is_nav = posixpath.basename(unquote(strip_fragment(book_href))).lower() in {"nav.xhtml", "nav.html"}
+            if has_ancestor_anchor or not elem.get("href") or resource_kind(href_base) == "image" or (links_to_nav_doc and not current_doc_is_nav):
                 elem.attrib.pop("href", None)
                 elem.tag = f"{{{XHTML_NS}}}span"
                 local = "span"
@@ -1430,6 +1489,7 @@ def sanitize_css(data: str) -> str:
     data = re.sub(r"(?m)^.*(?:/\*|\*/).*$", "", data)
     data = re.sub(r"//[^\n}]*}", "}", data)
     data = re.sub(r"(?m)(?<!:)//.*$", "", data)
+    data = re.sub(r"}\s*（[^{}\n;]*）", "}", data)
     data = re.sub(r"\\\s*(?=[;}])", "", data)
     data = re.sub(r":\s*([^;{}]+);\s*!important", r": \1 !important", data, flags=re.IGNORECASE)
     data = re.sub(r";{2,}", ";", data)
@@ -1439,6 +1499,7 @@ def sanitize_css(data: str) -> str:
         data = re.sub(r"(?im)(font-family\s*:\s*[^;\n{}]+);(?=\s*[^:\n{};]+;)", r"\1,", data)
     data = re.sub(r"(?i)(?<=[{;])\s*direction\s*:\s*[^;{}]+;?", "", data)
     data = re.sub(r"(?i)(?<=[{;])\s*duokan-text-indent\s*:\s*[^;{}]+;?", "", data)
+    data = re.sub(r"(?i)(?<=[{;])\s*text-spacing-trim\s*:\s*trim-start\s*;?", "", data)
     data = re.sub(r"(?i)(?<=[{;])\s*text-combine-horizontal\s*:\s*all\s*;?", "", data)
     data = re.sub(r"(?i)(?<=[{;])\s*text-combine\s*:\s*horizontal\s*;?", "", data)
     data = re.sub(
@@ -1627,6 +1688,8 @@ def repair_missing_xhtml_references(root_dir: Path) -> None:
         path = root_dir / Path(rel)
         try:
             root = parse_xml_recovering(read_text_file(path))
+            if root is None:
+                return ids
             for elem in root.iter():
                 if isinstance(elem.tag, str) and elem.get("id"):
                     ids.add(elem.get("id"))
@@ -1642,6 +1705,8 @@ def repair_missing_xhtml_references(root_dir: Path) -> None:
         try:
             root = parse_xml_recovering(read_text_file(path))
         except Exception:
+            continue
+        if root is None:
             continue
         changed = False
         for elem in list(root.iter()):
@@ -1747,23 +1812,45 @@ def repair_missing_css_references(root_dir: Path) -> None:
         if path.is_file()
     }
 
-    def css_repl(match: re.Match[str]) -> str:
-        quote_char = match.group(1) or ""
-        value = match.group(2).strip()
+    def resolve_css_reference(value: str) -> tuple[str | None, str]:
         base, frag = split_href(value)
         parts = urlsplit(base)
         if parts.scheme or parts.netloc or base.startswith("data:") or not base:
-            return match.group(0)
+            return None, frag
         doc_dir = posixpath.dirname(current_rel) or "."
         target = posixpath.normpath(posixpath.join(doc_dir, unquote(base)))
         if target.lower() in actual_paths:
-            return match.group(0)
+            return value, frag
         replacement = find_replacement_resource(base, candidates)
-        if replacement:
-            rel = posixpath.relpath(replacement, start=doc_dir)
-            if rel == ".":
-                rel = posixpath.basename(replacement)
-            return "url(%s%s%s)" % (quote_char, quote(rel, safe="/%:@!$&'()*+,;=-._~") + frag, quote_char)
+        if not replacement:
+            return "", frag
+        rel = posixpath.relpath(replacement, start=doc_dir)
+        if rel == ".":
+            rel = posixpath.basename(replacement)
+        return quote(rel, safe="/%:@!$&'()*+,;=-._~") + frag, frag
+
+    def css_import_repl(match: re.Match[str]) -> str:
+        quote_char = match.group(1) or match.group(3) or ""
+        value = match.group(2) or match.group(4) or match.group(5) or ""
+        suffix = match.group(6) or ""
+        resolved, _frag = resolve_css_reference(value.strip())
+        if resolved is None:
+            return match.group(0)
+        if resolved == "":
+            return ""
+        quote_out = quote_char or '"'
+        return "@import %s%s%s%s;" % (quote_out, resolved, quote_out, suffix)
+
+    def css_repl(match: re.Match[str]) -> str:
+        quote_char = match.group(1) or ""
+        value = match.group(2).strip()
+        resolved, frag = resolve_css_reference(value)
+        if resolved is None:
+            return match.group(0)
+        if resolved == value:
+            return match.group(0)
+        if resolved:
+            return "url(%s%s%s)" % (quote_char, resolved, quote_char)
         return "none"
 
     for path in root_dir.rglob("*"):
@@ -1771,7 +1858,12 @@ def repair_missing_css_references(root_dir: Path) -> None:
             continue
         current_rel = path.relative_to(root_dir).as_posix()
         data = read_text_file(path)
-        updated = re.sub(r"url\(\s*(['\"]?)([^)'\"]+)\1\s*\)", css_repl, data)
+        updated = re.sub(
+            r"""@import\s+(?:url\(\s*(['"]?)([^)'"]+)\1\s*\)|(['"])(.*?)\3|([^;\s]+))([^;]*);""",
+            css_import_repl,
+            data,
+        )
+        updated = re.sub(r"url\(\s*(['\"]?)([^)'\"]+)\1\s*\)", css_repl, updated)
         if updated != data:
             write_text_file(path, updated)
 
@@ -1831,21 +1923,34 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
         for meta in opf_root.xpath(".//*[local-name()='meta' and @property='rendition:layout']")
     )
     fixed_items: List[str] = []
+    manifest_hrefs_by_id: Dict[str, str] = {}
     for item in opf_root.xpath(".//*[local-name()='manifest']/*[local-name()='item']"):
         href = item.get("href", "")
         if not href or item.get("media-type") != "application/xhtml+xml":
             continue
+        item_id = item.get("id", "")
+        if item_id:
+            manifest_hrefs_by_id[item_id] = href
         properties = item.get("properties", "").split()
         if has_global_fixed_layout or "rendition:layout-pre-paginated" in properties or "layout-pre-paginated" in properties:
             fixed_items.append(posixpath.normpath(posixpath.join(opf_dir, unquote(href))))
+    for itemref in opf_root.xpath(".//*[local-name()='spine']/*[local-name()='itemref']"):
+        properties = itemref.get("properties", "").split()
+        if "rendition:layout-pre-paginated" not in properties and "layout-pre-paginated" not in properties:
+            continue
+        href = manifest_hrefs_by_id.get(itemref.get("idref", ""))
+        if href:
+            fixed_items.append(posixpath.normpath(posixpath.join(opf_dir, unquote(href))))
 
-    for rel in fixed_items:
+    for rel in dict.fromkeys(fixed_items):
         page_path = root_dir / Path(rel)
         if not page_path.exists():
             continue
         try:
             page_root = parse_xml_recovering(read_text_file(page_path))
         except Exception:
+            continue
+        if page_root is None:
             continue
         if page_root.xpath(".//*[local-name()='head']/*[local-name()='meta' and translate(@name, 'VIEWPORT', 'viewport')='viewport']"):
             continue
@@ -2078,6 +2183,10 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
         return
     changed = ensure_official_nav_has_toc(root)
     changed = flatten_pathological_single_chain_nav(root) or changed
+    for heading in root.xpath(".//*[local-name()='nav']//*[local-name()='h1' or local-name()='h2' or local-name()='h3' or local-name()='h4' or local-name()='h5' or local-name()='h6']"):
+        if not "".join(heading.itertext()).strip():
+            heading.text = "Table of Contents"
+            changed = True
     manifest_hrefs: Dict[str, str] = {}
     for item in opf_root.xpath(".//*[local-name()='manifest']/*[local-name()='item']"):
         item_id = item.get("id", "")
@@ -2107,7 +2216,7 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
             if parts.scheme or parts.netloc or not base:
                 continue
             target = posixpath.normpath(posixpath.join(nav_dir, unquote(base)))
-            if target not in spine_hrefs and Path(target).suffix.lower() in {".html", ".htm", ".xhtml"}:
+            if target not in spine_hrefs:
                 anchor.attrib.pop("href", None)
                 anchor.tag = f"{{{XHTML_NS}}}span"
                 changed = True
@@ -2163,6 +2272,35 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
                 continue
             if frag:
                 seen_fragment_for_spine.add(target)
+        for nav in root.xpath(".//*[local-name()='nav']"):
+            epub_type = " ".join(
+                part for part in (nav.get("{%s}type" % EPUB_NS, ""), nav.get("type", "")) if part
+            )
+            if "toc" not in epub_type.split():
+                continue
+            for ol in nav.xpath(".//*[local-name()='ol']"):
+                li_children = [
+                    child for child in ol
+                    if isinstance(child.tag, str) and etree.QName(child).localname == "li"
+                ]
+                if len(li_children) < 2:
+                    continue
+
+                def first_spine_index(li: etree._Element) -> int:
+                    indices = [
+                        index
+                        for anchor in li.xpath(".//*[local-name()='a'][@href]")
+                        for index in [nav_target_spine_index(anchor.get("href", ""))]
+                        if index is not None
+                    ]
+                    return min(indices) if indices else len(spine_order) + ol.index(li)
+
+                sorted_li = sorted(li_children, key=first_spine_index)
+                if sorted_li != li_children:
+                    for li in sorted_li:
+                        ol.remove(li)
+                        ol.append(li)
+                    changed = True
     for ol in list(root.xpath(".//*[local-name()='nav']//*[local-name()='ol']")):
         if not any(isinstance(child.tag, str) and etree.QName(child).localname == "li" for child in ol):
             parent = ol.getparent()
@@ -2287,6 +2425,55 @@ def manifest_media_type_for_path(path: Path, href: str) -> str:
     return extension_media_type(href) or detected
 
 
+def required_manifest_properties_for_xhtml(path: Path) -> List[str]:
+    """Return EPUB3 manifest properties required by SVG/MathML in XHTML."""
+    if not path.exists() or path.suffix.lower() not in {".html", ".xhtml", ".htm"}:
+        return []
+    try:
+        root = parse_xml_recovering(read_text_file(path))
+    except Exception:
+        return []
+    if root is None:
+        return []
+    required: List[str] = []
+    if root.xpath(".//*[local-name()='svg' and namespace-uri()='http://www.w3.org/2000/svg']"):
+        required.append("svg")
+    if root.xpath(".//*[local-name()='math' and namespace-uri()='http://www.w3.org/1998/Math/MathML']"):
+        required.append("mathml")
+    return required
+
+
+def is_external_href(href: str) -> bool:
+    """Return true for hyperlinks that do not point to a package file."""
+    parsed = urlsplit(href)
+    return bool(parsed.scheme)
+
+
+def collect_hyperlinked_xhtml_targets(root_dir: Path, opf_dir: str) -> set[str]:
+    """Collect package-relative XHTML targets reached by hyperlinks."""
+    targets: set[str] = set()
+    for path in root_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".html", ".xhtml", ".htm"}:
+            continue
+        try:
+            root = parse_xml_recovering(read_text_file(path))
+        except Exception:
+            continue
+        if root is None:
+            continue
+        base_rel = path.relative_to(root_dir).as_posix()
+        base_dir = posixpath.dirname(base_rel) or "."
+        for href in root.xpath(".//*[@href]/@href | .//*[@xlink:href]/@xlink:href", namespaces={"xlink": XLINK_NS}):
+            if not href or is_external_href(href) or href.startswith("#"):
+                continue
+            target_path = unquote(urlsplit(href).path)
+            if not target_path:
+                continue
+            package_rel = posixpath.normpath(posixpath.join(base_dir, target_path))
+            targets.add(package_rel.lower())
+    return targets
+
+
 def is_calibre_bookmark_path(path: str) -> bool:
     return posixpath.normpath(unquote(path)).replace("\\", "/").lower() in CALIBRE_BOOKMARKS
 
@@ -2312,6 +2499,28 @@ def is_invalid_svg_resource(path: Path) -> bool:
 
 PRIVATE_OPF_PROPERTY_TOKENS = {"duokan-page-fitwindow", "duokan-page-fullscreen"}
 PRIVATE_OPF_META_PROPERTIES = {"hdf"}
+KNOWN_OPF_PROPERTY_PREFIXES = {"calibre", "dcterms", "media", "rendition"}
+
+
+def clean_opf_property_tokens(value: str) -> List[str]:
+    return [
+        token
+        for token in value.split()
+        if token not in PRIVATE_OPF_PROPERTY_TOKENS and OPF_PROPERTY_TOKEN_RE.fullmatch(token)
+    ]
+
+
+def normalize_uuid_identifier(value: str) -> str:
+    text = value.strip()
+    if not text.lower().startswith("urn:uuid:"):
+        return text
+    try:
+        parsed = uuid.UUID(text.split(":", 2)[2])
+    except ValueError:
+        parsed = uuid.uuid4()
+    return "urn:uuid:%s" % parsed
+
+
 PUBLICATION_RESOURCE_SUFFIXES = {
     ".css",
     ".gif",
@@ -2326,6 +2535,23 @@ PUBLICATION_RESOURCE_SUFFIXES = {
     ".webp",
     ".xhtml",
 }
+
+
+def is_unmanifested_nested_cover_copy(rel: str, declared_hrefs: set[str], existing_hrefs: set[str], opf_dir: str) -> bool:
+    rel_norm = posixpath.normpath(unquote(rel)).replace("\\", "/").lower()
+    opf_norm = posixpath.normpath(unquote(opf_dir)).replace("\\", "/").lower()
+    if rel_norm in declared_hrefs or opf_norm in {"", "."}:
+        return False
+    parts = rel_norm.split("/")
+    opf_parts = opf_norm.split("/")
+    if len(parts) != len(opf_parts) + 2 or parts[: len(opf_parts)] != opf_parts:
+        return False
+    if parts[len(opf_parts)] != opf_parts[-1]:
+        return False
+    filename = parts[-1]
+    if not filename.startswith("cover.") or Path(filename).suffix.lower() not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+        return False
+    return "/".join(opf_parts + [filename]) in existing_hrefs
 
 
 def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
@@ -2357,6 +2583,60 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             return []
         return list(spine.xpath("./*[local-name()='itemref']"))
 
+    def ensure_nav_item() -> bool:
+        nav_items = [
+            item
+            for item in manifest_items()
+            if "nav" in item.get("properties", "").split()
+            and item.get("media-type") == "application/xhtml+xml"
+        ]
+        if len(nav_items) == 1:
+            return False
+        for extra_nav in nav_items[1:]:
+            tokens = [token for token in extra_nav.get("properties", "").split() if token != "nav"]
+            if tokens:
+                extra_nav.set("properties", " ".join(tokens))
+            else:
+                extra_nav.attrib.pop("properties", None)
+
+        if nav_items:
+            return len(nav_items) > 1
+
+        used_ids = {item.get("id", "") for item in manifest_items()}
+        nav_id = make_xml_id("nav", used_ids)
+        nav_name = "nav.xhtml"
+        nav_rel = posixpath.normpath(posixpath.join(opf_dir, nav_name)) if opf_dir != "." else nav_name
+        nav_path = root_dir / Path(nav_rel)
+        counter = 2
+        while nav_path.exists():
+            nav_name = f"nav-{counter}.xhtml"
+            nav_rel = posixpath.normpath(posixpath.join(opf_dir, nav_name)) if opf_dir != "." else nav_name
+            nav_path = root_dir / Path(nav_rel)
+            counter += 1
+
+        id_to_href = {
+            item.get("id", ""): item.get("href", "")
+            for item in manifest_items()
+            if item.get("media-type") == "application/xhtml+xml"
+        }
+        fallback = ""
+        for itemref in spine_itemrefs():
+            href = id_to_href.get(itemref.get("idref", ""))
+            if href:
+                fallback = posixpath.normpath(posixpath.join(opf_dir, href)) if opf_dir != "." else href
+                break
+        if not fallback and id_to_href:
+            href = next(iter(id_to_href.values()))
+            fallback = posixpath.normpath(posixpath.join(opf_dir, href)) if opf_dir != "." else href
+
+        write_text_file(nav_path, build_nav(nav_rel, None, [], [], [], opf_dir, fallback))
+        item = etree.SubElement(manifest, f"{{{OPF_NS}}}item")
+        item.set("id", nav_id)
+        item.set("href", nav_name)
+        item.set("media-type", "application/xhtml+xml")
+        item.set("properties", "nav")
+        return True
+
     changed = False
     for misplaced_spine in list(manifest.xpath("./*[local-name()='spine']")):
         manifest.remove(misplaced_spine)
@@ -2372,7 +2652,6 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         if parent is not None:
             parent.remove(guide)
             changed = True
-    candidates = build_resource_candidates(root_dir)
     removed_ids: set[str] = set()
     removed_files: set[Path] = set()
     id_renames: Dict[str, str] = {}
@@ -2420,6 +2699,22 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         for item in manifest_items()
         if item.get("href")
     }
+    existing_package_hrefs = {
+        path.relative_to(root_dir).as_posix().lower()
+        for path in root_dir.rglob("*")
+        if path.is_file()
+    }
+    for path in sorted(root_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root_dir).as_posix()
+        if is_unmanifested_nested_cover_copy(rel, declared_package_hrefs, existing_package_hrefs, opf_dir):
+            try:
+                path.unlink()
+                existing_package_hrefs.discard(rel.lower())
+            except OSError:
+                pass
+    candidates = build_resource_candidates(root_dir)
     for path in sorted(root_dir.rglob("*")):
         if not path.is_file():
             continue
@@ -2523,8 +2818,9 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                 changed = True
         props = item.get("properties", "")
         tokens = props.split()
-        if any(token in PRIVATE_OPF_PROPERTY_TOKENS for token in tokens):
-            tokens = [token for token in tokens if token not in PRIVATE_OPF_PROPERTY_TOKENS]
+        clean_tokens = clean_opf_property_tokens(props)
+        if clean_tokens != tokens:
+            tokens = clean_tokens
             if tokens:
                 item.set("properties", " ".join(tokens))
             else:
@@ -2541,6 +2837,22 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             props = item.get("properties", "")
             tokens = props.split()
             changed = True
+        if item.get("media-type") == "application/xhtml+xml":
+            xhtml_path = root_dir / Path(posixpath.normpath(posixpath.join(opf_dir, unquote(href))))
+            required_tokens = required_manifest_properties_for_xhtml(xhtml_path)
+            stale_tokens = [token for token in tokens if token in {"svg", "mathml", "switch"} and token not in required_tokens]
+            if stale_tokens:
+                tokens = [token for token in tokens if token not in stale_tokens]
+                if tokens:
+                    item.set("properties", " ".join(tokens))
+                else:
+                    item.attrib.pop("properties", None)
+                changed = True
+            missing_tokens = [token for token in required_tokens if token not in tokens]
+            if missing_tokens:
+                tokens = list(dict.fromkeys(tokens + missing_tokens))
+                item.set("properties", " ".join(tokens))
+                changed = True
         if "nav" in tokens:
             is_generated_nav = posixpath.basename(href) == "nav.xhtml"
             if has_generated_nav and not is_generated_nav:
@@ -2578,6 +2890,17 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         if spine.get("toc"):
             spine.attrib.pop("toc", None)
             changed = True
+        if spine.get("page-map"):
+            spine.attrib.pop("page-map", None)
+            changed = True
+        hyperlinked_xhtml_targets = collect_hyperlinked_xhtml_targets(root_dir, opf_dir)
+        has_xhtml_spine_item = False
+        for itemref in spine_itemrefs():
+            idref = id_renames.get(itemref.get("idref", ""), itemref.get("idref", ""))
+            manifest_matches = manifest.xpath("./*[local-name()='item' and @id=$idref]", idref=idref)
+            if manifest_matches and manifest_matches[0].get("media-type") == "application/xhtml+xml":
+                has_xhtml_spine_item = True
+                break
         seen_idrefs: set[str] = set()
         for itemref in spine_itemrefs():
             for attr in list(itemref.attrib):
@@ -2599,8 +2922,10 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                 itemref.attrib.pop("linear", None)
                 changed = True
             props = itemref.get("properties", "")
-            if any(token in PRIVATE_OPF_PROPERTY_TOKENS for token in props.split()):
-                tokens = [token for token in props.split() if token not in PRIVATE_OPF_PROPERTY_TOKENS]
+            tokens = props.split()
+            clean_tokens = clean_opf_property_tokens(props)
+            if clean_tokens != tokens:
+                tokens = clean_tokens
                 if tokens:
                     itemref.set("properties", " ".join(tokens))
                 else:
@@ -2615,6 +2940,10 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             manifest_item = manifest_matches[0] if manifest_matches else None
             if manifest_item is not None:
                 href = manifest_item.get("href", "")
+                if has_xhtml_spine_item and manifest_item.get("media-type") != "application/xhtml+xml":
+                    spine.remove(itemref)
+                    changed = True
+                    continue
                 if posixpath.basename(unquote(href)).lower() in {"nav.html", "nav.xhtml"}:
                     spine.remove(itemref)
                     changed = True
@@ -2624,9 +2953,17 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                     changed = True
                 basename = posixpath.basename(unquote(href)).lower()
                 item_id_lower = idref.lower()
+                package_href = posixpath.normpath(posixpath.join(opf_dir, unquote(href))).lower()
                 if itemref.get("linear") == "no" and (
                     basename in {"cover.html", "cover.xhtml", "cover_page.html", "cover_page.xhtml", "titlepage.html", "titlepage.xhtml"}
                     or item_id_lower in {"cover", "cover_page", "titlepage", "cover.xhtml", "cover_page.xhtml", "titlepage.xhtml"}
+                ):
+                    itemref.attrib.pop("linear", None)
+                    changed = True
+                elif (
+                    itemref.get("linear") == "no"
+                    and manifest_item.get("media-type") == "application/xhtml+xml"
+                    and package_href not in hyperlinked_xhtml_targets
                 ):
                     itemref.attrib.pop("linear", None)
                     changed = True
@@ -2635,6 +2972,11 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         metadata = etree.Element(f"{{{OPF_NS}}}metadata", nsmap={"dc": DC_NS})
         root.insert(0, metadata)
         changed = True
+    declared_property_prefixes = set(KNOWN_OPF_PROPERTY_PREFIXES)
+    declared_property_prefixes.update(
+        match.group(1)
+        for match in re.finditer(r"([A-Za-z_][\w.-]*):\s+\S+", root.get("prefix", ""))
+    )
     for elem in list(metadata):
         if isinstance(elem.tag, str) and etree.QName(elem).namespace == DC_NS and etree.QName(elem).localname not in DC_METADATA_ELEMENTS and etree.QName(elem).localname != "meta":
             metadata.remove(elem)
@@ -2666,6 +3008,11 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             changed = True
             continue
         if meta.get("property") in PRIVATE_OPF_META_PROPERTIES:
+            metadata.remove(meta)
+            changed = True
+            continue
+        prop = meta.get("property", "")
+        if ":" in prop and prop.split(":", 1)[0] not in declared_property_prefixes:
             metadata.remove(meta)
             changed = True
             continue
@@ -2750,6 +3097,11 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             changed = True
         else:
             modified_seen = True
+    if not modified_seen:
+        meta = etree.SubElement(metadata, f"{{{OPF_NS}}}meta")
+        meta.set("property", "dcterms:modified")
+        meta.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        changed = True
     titles = list(metadata.findall(f"{{{DC_NS}}}title"))
     if not any((title.text or "").strip() for title in titles):
         title = titles[0] if titles else etree.SubElement(metadata, f"{{{DC_NS}}}title")
@@ -2772,6 +3124,11 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             metadata.remove(ident)
             identifiers.remove(ident)
             changed = True
+            continue
+        normalized_identifier = normalize_uuid_identifier(ident.text or "")
+        if ident.text != normalized_identifier:
+            ident.text = normalized_identifier
+            changed = True
     unique_id = root.get("unique-identifier", "")
     if not unique_id or not any(ident.get("id") == unique_id for ident in identifiers):
         replacement = next((ident for ident in identifiers if ident.get("id") and (ident.text or "").strip()), None)
@@ -2784,6 +3141,8 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             replacement.text = "urn:uuid:%s" % uuid.uuid4()
             changed = True
         root.set("unique-identifier", replacement.get("id"))
+        changed = True
+    if ensure_nav_item():
         changed = True
     if changed:
         etree.cleanup_namespaces(root, top_nsmap={None: OPF_NS, "dc": DC_NS})

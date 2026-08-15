@@ -1,5 +1,6 @@
 import re
 import sys
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -18,17 +19,21 @@ from epub3itizer.conversion import (  # noqa: E402
     cleanup_nav_leaf_spans,
     cleanup_opf_manifest,
     collect_doc_features,
+    convert_named_entities,
     convert_bmp_images,
+    collect_hyperlinked_xhtml_targets,
     filter_guide_to_spine,
     filter_toc_to_spine,
     fix_case_mismatched_local_hrefs,
     flatten_pathological_single_chain_nav,
     normalize_all_xhtml_files,
+    normalize_epubcheck_xhtml,
     normalize_ncx_play_order,
     parse_ncx_file,
     parse_xml_recovering,
     repair_missing_css_references,
     repair_missing_xhtml_references,
+    required_manifest_properties_for_xhtml,
     sanitize_all_css_files,
     sanitize_css,
     sanitize_style_value,
@@ -137,6 +142,113 @@ def test_repair_only_fixes_case_mismatched_local_hrefs(tmp_path):
         data = zf.read("OPS/ch1.xhtml").decode("utf-8")
     assert "Images/cover.jpg" in data
     assert "COVER.JPG" not in data
+
+
+def test_repair_only_adds_svg_manifest_property(tmp_path):
+    source = tmp_path / "svg-cover.epub"
+    output = tmp_path / "svg-cover-repaired.epub"
+    container_xml = """<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OPS/package.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+    opf = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Sample</dc:title>
+    <dc:language>zh-Hant</dc:language>
+    <dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="cover-page" href="Text/cover.xhtml" media-type="application/xhtml+xml"/>
+    <item id="chap" href="Text/ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover-image" href="Images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+  </manifest>
+  <spine>
+    <itemref idref="cover-page"/>
+    <itemref idref="chap"/>
+  </spine>
+</package>
+"""
+    cover = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Cover</title></head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <image href="../Images/cover.jpg" width="100" height="100"/>
+</svg>
+</body>
+</html>
+"""
+    chapter = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter</title></head>
+<body><p>Text</p></body>
+</html>
+"""
+    with zipfile.ZipFile(source, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", container_xml)
+        zf.writestr("OPS/package.opf", opf)
+        zf.writestr("OPS/Text/cover.xhtml", cover)
+        zf.writestr("OPS/Text/ch1.xhtml", chapter)
+        zf.writestr("OPS/Images/cover.jpg", b"\xff\xd8\xff\xd9")
+
+    repair_epub(source, output)
+
+    with zipfile.ZipFile(output) as zf:
+        opf_root = etree.fromstring(zf.read("OPS/package.opf"))
+    cover_item = opf_root.xpath(".//*[local-name()='item' and @id='cover-page']")[0]
+    assert "svg" in cover_item.get("properties", "").split()
+
+
+def test_repair_only_removes_stale_svg_manifest_property(tmp_path):
+    source = tmp_path / "stale-svg-cover.epub"
+    output = tmp_path / "stale-svg-cover-repaired.epub"
+    container_xml = """<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OPS/package.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+    opf = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Sample</dc:title>
+    <dc:language>zh-Hant</dc:language>
+    <dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="cover-page" href="Text/cover.xhtml" media-type="application/xhtml+xml" properties="svg"/>
+    <item id="cover-image" href="Images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+  </manifest>
+  <spine>
+    <itemref idref="cover-page"/>
+  </spine>
+</package>
+"""
+    cover = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Cover</title></head>
+<body><div><img alt="cover" src="../Images/cover.jpg"/></div></body>
+</html>
+"""
+    with zipfile.ZipFile(source, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", container_xml)
+        zf.writestr("OPS/package.opf", opf)
+        zf.writestr("OPS/Text/cover.xhtml", cover)
+        zf.writestr("OPS/Images/cover.jpg", b"\xff\xd8\xff\xd9")
+
+    repair_epub(source, output)
+
+    with zipfile.ZipFile(output) as zf:
+        opf_root = etree.fromstring(zf.read("OPS/package.opf"))
+    cover_item = opf_root.xpath(".//*[local-name()='item' and @id='cover-page']")[0]
+    assert "svg" not in cover_item.get("properties", "").split()
 
 
 def test_convert_chinese_document_converts_readable_text_quotes_not_links():
@@ -300,6 +412,44 @@ def test_abnormal_namespace_declarations_are_sanitized_for_xhtml():
 
     assert etree.QName(root).namespace == "http://www.w3.org/1999/xhtml"
     assert "xmlns" not in root.nsmap
+
+
+def test_plain_text_xhtml_is_wrapped_before_parse():
+    root = parse_xml_recovering("Welcome")
+    output = etree.tostring(root, encoding="unicode")
+
+    assert etree.QName(root).localname == "html"
+    assert "Welcome" in output
+    assert root.xpath("//*[local-name()='body']")
+
+
+def test_ocr_fake_text_tag_with_many_empty_attrs_is_flattened():
+    root = parse_xml_recovering(
+        """<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>few drin]<s at="" bar="" drake="" sensed="" the="" sad="" predatory="" face="" expected:=""/></p>
+</body></html>"""
+    )
+
+    normalize_epubcheck_xhtml(root)
+    output = etree.tostring(root, encoding="unicode")
+
+    assert "<s " not in output
+    assert "s at bar drake sensed the sad predatory face expected:" in output
+    etree.fromstring(output.encode("utf-8"))
+
+
+def test_content_link_back_to_nav_is_demoted_to_span():
+    root = parse_xml_recovering(
+        """<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<h1><a href="nav.xhtml#n1"><span>Chapter</span></a></h1>
+</body></html>"""
+    )
+
+    normalize_epubcheck_xhtml(root, "Chapter.xhtml")
+    output = etree.tostring(root, encoding="unicode")
+
+    assert 'href="nav.xhtml#n1"' not in output
+    assert "<span>Chapter</span>" in output
 
 
 def test_corrupted_xhtml_namespace_year_is_sanitized():
@@ -472,6 +622,14 @@ def test_malformed_class_attribute_name_is_repaired_before_parse():
     assert "clasＶs" not in output
 
 
+def test_named_entity_missing_semicolon_before_attribute_quote_is_repaired():
+    fixed = convert_named_entities('<div style="font-family: &quot" data-id="x"/>')
+
+    assert "&quot\"" not in fixed
+    assert "&#34;\"" in fixed
+    etree.fromstring(fixed.encode("utf-8"))
+
+
 def test_html_missing_body_gets_empty_body():
     root = parse_xml_recovering(
         """<html><head><title>Only Head</title></head></html>"""
@@ -482,6 +640,26 @@ def test_html_missing_body_gets_empty_body():
 
     assert out_root.xpath("//*[local-name()='head']")
     assert out_root.xpath("//*[local-name()='body']")
+
+
+def test_repair_missing_xhtml_references_skips_unparseable_empty_xhtml(tmp_path):
+    (tmp_path / "Text").mkdir()
+    (tmp_path / "Text" / "empty.xhtml").write_text("", encoding="utf-8")
+
+    repair_missing_xhtml_references(tmp_path)
+
+
+def test_required_manifest_properties_skips_unparseable_empty_xhtml(tmp_path):
+    empty = tmp_path / "empty.xhtml"
+    empty.write_text("", encoding="utf-8")
+
+    assert required_manifest_properties_for_xhtml(empty) == []
+
+
+def test_collect_hyperlinked_targets_skips_unparseable_empty_xhtml(tmp_path):
+    (tmp_path / "empty.xhtml").write_text("", encoding="utf-8")
+
+    assert collect_hyperlinked_xhtml_targets(tmp_path, ".") == set()
 
 
 def test_invalid_head_block_element_is_removed():
@@ -706,6 +884,8 @@ def test_opf_cleanup_removes_old_attrs_private_tokens_and_fills_empty_spine(tmp_
     assert 'scheme="uuid"' not in output
     assert 'scheme="marc:relators"' not in output
     assert 'role="aut"' not in output
+    fixed_uid = re.search(r"<dc:identifier[^>]*>(urn:uuid:[^<]+)</dc:identifier>", output).group(1)
+    uuid.UUID(fixed_uid.split(":", 2)[2])
     assert "<spine>" in output
     assert 'idref="chap"' in output
 
@@ -1158,6 +1338,30 @@ def test_invalid_spine_properties_are_dropped():
     assert "height=2000" not in opf3
     assert 'properties="page-spread-left"' in opf3
     etree.fromstring(opf3.encode("utf-8"))
+
+
+def test_cleanup_opf_removes_spine_page_map_and_stale_switch_manifest_property(tmp_path):
+    root = tmp_path
+    (root / "OEBPS" / "Text").mkdir(parents=True)
+    (root / "OEBPS" / "Text" / "chap.xhtml").write_text(
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body><div id="svgswitch0"><p>ok</p></div></body></html>',
+        encoding="utf-8",
+    )
+    opf = root / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>x</dc:title><dc:language>zh-Hant</dc:language></metadata>
+<manifest><item id="chap" href="Text/chap.xhtml" media-type="application/xhtml+xml" properties="switch"/></manifest>
+<spine page-map="_page_map_"><itemref idref="chap"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(root, "OEBPS/content.opf")
+    output = opf.read_text(encoding="utf-8")
+
+    assert "page-map" not in output
+    assert "switch" not in output
 
 
 def test_itemref_linear_type_is_renamed_to_linear():
@@ -1657,6 +1861,21 @@ def test_missing_css_url_is_removed_when_no_replacement_exists(tmp_path):
     assert "background: rgba(0,0,0,.2) none" in output
 
 
+def test_missing_css_import_is_removed_when_no_replacement_exists(tmp_path):
+    (tmp_path / "OEBPS" / "css").mkdir(parents=True)
+    css = tmp_path / "OEBPS" / "css" / "book-style.css"
+    css.write_text(
+        '@import "style-bc-kadokawa.css";\nbody { color: black; }\n',
+        encoding="utf-8",
+    )
+
+    repair_missing_css_references(tmp_path)
+
+    output = css.read_text(encoding="utf-8")
+    assert "style-bc-kadokawa.css" not in output
+    assert "body { color: black; }" in output
+
+
 def test_missing_css_url_uses_matching_existing_resource(tmp_path):
     (tmp_path / "OEBPS" / "Styles").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Images").mkdir(parents=True)
@@ -1861,6 +2080,32 @@ def test_cleanup_opf_removes_missing_items_js_bookmarks_and_dedupes_nav(tmp_path
     assert data.count('properties="nav"') == 1
 
 
+def test_cleanup_opf_removes_unmanifested_nested_cover_copy(tmp_path):
+    (tmp_path / "OEBPS" / "OEBPS").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "cover.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+    (tmp_path / "OEBPS" / "OEBPS" / "cover.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<manifest>
+<item id="cover-image" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+<item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/>
+</manifest>
+<spine><itemref idref="chapter"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert 'href="cover.jpg"' in data
+    assert "OEBPS/cover.jpg" not in data
+    assert not (tmp_path / "OEBPS" / "OEBPS" / "cover.jpg").exists()
+
+
 def test_cleanup_opf_renames_metadata_id_conflicting_with_manifest(tmp_path):
     (tmp_path / "OEBPS").mkdir()
     (tmp_path / "OEBPS" / "title.xhtml").write_text("<html/>", encoding="utf-8")
@@ -1930,6 +2175,7 @@ def test_cleanup_opf_applies_calibre_style_structural_fixes(tmp_path):
 <dc:meta property="dcterms:modified">2026-07-11T12:00:00Z</dc:meta>
 <dc:meta opf:name="cover" content="cover-image"/>
 <meta property="hdf">0401000000000160f8203861</meta>
+<meta property="ebpaj:guide-version">1.1</meta>
 <opf:meta>2026-07-11T12:00:00Z</opf:meta>
 </metadata>
 <manifest>
@@ -1950,12 +2196,15 @@ def test_cleanup_opf_applies_calibre_style_structural_fixes(tmp_path):
     assert 'idref="id_1bad"' in data
     assert 'media-type="application/xhtml+xml"' in data
     assert 'linear-type=' not in data
-    assert 'idref="id_1bad" linear="no"' in data
+    assert 'idref="id_1bad" linear="no"' not in data
     assert 'linear="maybe"' not in data
     assert 'duokan-page-fullscreen' not in data
     assert 'property="hdf"' not in data
+    assert "ebpaj:guide-version" not in data
     assert "<opf:meta" not in data
     assert data.count('property="dcterms:modified"') == 1
+    assert data.count('properties="nav"') == 1
+    assert (tmp_path / "OEBPS" / "nav.xhtml").exists()
     assert 'id="nohref"' not in data
     assert data.count('href="Text/b.xhtml"') == 1
     assert data.count('idref="dup"') == 1
@@ -2143,7 +2392,9 @@ def test_cleanup_opf_sanitizes_abnormal_namespaces(tmp_path):
     data = opf.read_text(encoding="utf-8")
     root = etree.fromstring(data.encode("utf-8"))
     assert etree.QName(root).namespace == "http://www.idpf.org/2007/opf"
-    assert root.xpath("string(//*[local-name()='identifier'])") == "urn:uuid:test"
+    fixed_uid = root.xpath("string(//*[local-name()='identifier'])")
+    assert fixed_uid.startswith("urn:uuid:")
+    uuid.UUID(fixed_uid.split(":", 2)[2])
     assert root.xpath("string(//*[local-name()='language'])") == "zh-Hant"
     assert 'media-type="application/xhtml+xml"' in data
 
@@ -2240,6 +2491,18 @@ def test_css_duokan_text_indent_is_removed():
     assert "text-indent: 2em" in output
 
 
+def test_css_text_spacing_trim_start_is_removed():
+    output = sanitize_css(
+        """.chapter {
+    text-spacing-trim: trim-start;
+    text-indent: 2em;
+}"""
+    )
+
+    assert "text-spacing-trim" not in output
+    assert "text-indent: 2em" in output
+
+
 def test_css_directional_properties_with_spaces_are_hyphenated():
     output = sanitize_css(
         """h1 {
@@ -2280,6 +2543,14 @@ def test_inline_style_duokan_text_indent_is_removed():
     assert "color: black" in output
 
 
+def test_inline_style_text_spacing_trim_is_removed():
+    output = sanitize_style_value("text-spacing-trim: trim-start; text-indent: 2em; color: black")
+
+    assert "text-spacing-trim" not in output
+    assert "text-indent: 2em" in output
+    assert "color: black" in output
+
+
 def test_css_duplicate_properties_keep_last_value_in_rule_blocks():
     output = sanitize_css(
         """.dupe {
@@ -2294,6 +2565,14 @@ def test_css_duplicate_properties_keep_last_value_in_rule_blocks():
     assert output.count("border-left") == 1
     assert "font-weight: bold" in output
     assert "border-left: none" in output
+
+
+def test_css_trailing_chinese_note_after_rule_is_removed():
+    output = sanitize_css('.textItalic { font-style: normal; }（加標識"I"）\n.next { color: black; }')
+
+    assert "加標識" not in output
+    assert ".textItalic" in output
+    assert ".next" in output
 
 
 def test_css_fullwidth_percent_is_normalized():
@@ -2379,6 +2658,132 @@ def test_fixed_layout_pages_get_viewport_from_first_image(tmp_path):
     assert 'content="width=640, height=960"' in output
 
 
+def test_fixed_layout_spine_itemref_gets_viewport_from_first_image(tmp_path):
+    pil_image = pytest.importorskip("PIL.Image")
+    (tmp_path / "OEBPS" / "image").mkdir(parents=True)
+    pil_image.new("RGB", (900, 1200)).save(tmp_path / "OEBPS" / "image" / "cover.jpg")
+    (tmp_path / "OEBPS" / "cover.xhtml").write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Cover</title></head>
+<body><div><img src="image/cover.jpg" alt="cover" style="height: 100%"/></div></body>
+</html>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "OEBPS" / "content.opf").write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata/>
+<manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="cover" properties="rendition:layout-pre-paginated rendition:spread-none"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    add_fixed_layout_viewports(tmp_path, "OEBPS/content.opf")
+
+    output = (tmp_path / "OEBPS" / "cover.xhtml").read_text(encoding="utf-8")
+    assert 'name="viewport"' in output
+    assert 'content="width=900, height=1200"' in output
+
+
+def test_non_table_caption_is_rewritten_to_figcaption():
+    root = parse_xml_recovering(
+        """<html xmlns="http://www.w3.org/1999/xhtml"><body><figure><img src="a.jpg"/><caption><p>Caption</p></caption></figure></body></html>"""
+    )
+
+    normalize_epubcheck_xhtml(root)
+
+    assert root.xpath(".//*[local-name()='figcaption']")
+    assert not root.xpath(".//*[local-name()='caption']")
+
+
+def test_cleanup_opf_removes_invalid_spine_property_tokens(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Sample</dc:title><dc:language>zh-Hant</dc:language></metadata>
+<manifest><item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="chapter" properties="viewport-width=1514, height=2048"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    output = opf.read_text(encoding="utf-8")
+    assert "viewport-width" not in output
+    assert "height=2048" not in output
+    assert '<itemref idref="chapter"/>' in output
+    assert 'properties="nav"' in output
+
+
+def test_cleanup_opf_and_nav_remove_image_spine_and_image_nav_link(tmp_path):
+    (tmp_path / "EPUB").mkdir()
+    (tmp_path / "EPUB" / "cover.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 20)
+    (tmp_path / "EPUB" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    (tmp_path / "EPUB" / "nav.xhtml").write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body><nav epub:type="toc"><h2/><ol><li><a href="cover.jpg">cover.jpg</a></li></ol></nav></body></html>""",
+        encoding="utf-8",
+    )
+    opf = tmp_path / "EPUB" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Sample</dc:title><dc:language>zh-Hant</dc:language></metadata>
+<manifest>
+<item id="cover" href="cover.jpg" media-type="image/jpeg"/>
+<item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+</manifest>
+<spine><itemref idref="cover"/><itemref idref="chapter"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "EPUB/content.opf")
+    cleanup_nav_leaf_spans(tmp_path, "EPUB/content.opf")
+
+    opf_output = opf.read_text(encoding="utf-8")
+    nav_output = (tmp_path / "EPUB" / "nav.xhtml").read_text(encoding="utf-8")
+    assert 'idref="cover"' not in opf_output
+    assert 'href="cover.jpg"' not in nav_output
+    assert "Table of Contents" in nav_output
+    assert 'href="chapter.xhtml"' in nav_output
+
+
+def test_cleanup_nav_sorts_toc_links_by_spine_order(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    for name in ("nav.xhtml", "ch1.xhtml", "ch2.xhtml", "ch3.xhtml"):
+        (tmp_path / "OEBPS" / "Text" / name).write_text("<html/>", encoding="utf-8")
+    (tmp_path / "OEBPS" / "content.opf").write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<manifest>
+<item id="nav" href="Text/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+<item id="ch1" href="Text/ch1.xhtml" media-type="application/xhtml+xml"/>
+<item id="ch2" href="Text/ch2.xhtml" media-type="application/xhtml+xml"/>
+<item id="ch3" href="Text/ch3.xhtml" media-type="application/xhtml+xml"/>
+</manifest>
+<spine><itemref idref="ch1"/><itemref idref="ch2"/><itemref idref="ch3"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "OEBPS" / "Text" / "nav.xhtml").write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body><nav epub:type="toc"><ol>
+<li><a href="ch3.xhtml">Three</a></li>
+<li><a href="ch1.xhtml">One</a></li>
+<li><a href="ch2.xhtml">Two</a></li>
+</ol></nav></body></html>""",
+        encoding="utf-8",
+    )
+
+    cleanup_nav_leaf_spans(tmp_path, "OEBPS/content.opf")
+
+    output = (tmp_path / "OEBPS" / "Text" / "nav.xhtml").read_text(encoding="utf-8")
+    assert output.index("ch1.xhtml") < output.index("ch2.xhtml") < output.index("ch3.xhtml")
+
+
 def test_cleanup_opf_makes_cover_xhtml_linear_by_default(tmp_path):
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Text" / "cover.xhtml").write_text("<html/>", encoding="utf-8")
@@ -2396,6 +2801,54 @@ def test_cleanup_opf_makes_cover_xhtml_linear_by_default(tmp_path):
     data = opf.read_text(encoding="utf-8")
     assert 'idref="cover.xhtml"' in data
     assert 'linear="no"' not in data
+
+
+def test_cleanup_opf_makes_unreachable_non_linear_xhtml_linear(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    (tmp_path / "OEBPS" / "Text" / "appendix.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<manifest>
+<item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/>
+<item id="appendix" href="Text/appendix.xhtml" media-type="application/xhtml+xml"/>
+</manifest>
+<spine><itemref idref="chapter"/><itemref idref="appendix" linear="no"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert 'idref="appendix"' in data
+    assert 'linear="no"' not in data
+
+
+def test_cleanup_opf_preserves_reachable_non_linear_xhtml(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text(
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body><a href="appendix.xhtml">附錄</a></body></html>',
+        encoding="utf-8",
+    )
+    (tmp_path / "OEBPS" / "Text" / "appendix.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<manifest>
+<item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/>
+<item id="appendix" href="Text/appendix.xhtml" media-type="application/xhtml+xml"/>
+</manifest>
+<spine><itemref idref="chapter"/><itemref idref="appendix" linear="no"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert 'idref="appendix" linear="no"' in data
 
 
 def test_cleanup_opf_removes_nav_itemref_even_when_id_is_toc(tmp_path):

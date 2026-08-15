@@ -1,5 +1,72 @@
 # Change Log
 
+## 2026-08-15
+
+- 缺失 XHTML 資源修復流程新增空檔/不可解析檔案防護；掃描連結與快取
+  anchor id 時若頁面解析不到 root，會跳過該檔而不是中止整本修復，避免
+  圖像型或殘缺頁面造成 `NoneType.iter`。
+- OPF manifest 清理、超連結目標掃描與固定版面 viewport 修復也會跳過空檔或
+  不可解析 XHTML，避免漫畫/圖像型 EPUB 的空殼頁造成 `NoneType.xpath`。
+- `repair-only` 新增把純文字 `.html/.xhtml` 包成最小合法 XHTML、缺少 EPUB3
+  nav manifest 時自動補 `nav.xhtml`、缺少 `dcterms:modified` 時補合法時間，
+  並移除未宣告 prefix 的 OPF metadata property，例如 `ebpaj:guide-version`，
+  避免固定版面/漫畫 EPUB 因舊閱讀器私有欄位而無法通過 EPUBCheck。
+- XHTML 與 OPF 清理新增處理掃描/OCR 破碎文字被誤解析成大量空屬性標籤、
+  正文標題反向連回非 spine `nav.xhtml`、圖片被放入 spine、以及 nav 連到圖片
+  而非正文頁的情況；修復時會保留可讀文字、移除違規連結，並讓 nav 回到第一個
+  合法正文 XHTML。
+- XHTML entity 清理新增修復缺少分號的已知 HTML entity，例如
+  `&quot"` 會在解析前轉為安全數字 entity，避免網頁快照轉出的 EPUB 因
+  屬性值內半壞 entity 造成 EPUBCheck `RSC-016` 致命錯誤。
+- CSS sanitizer 新增移除 `text-spacing-trim: trim-start;`，包含一般 CSS
+  規則與 XHTML inline style，避免新式/未廣泛支援的間距修剪宣告造成
+  EPUBCheck 或閱讀器相容性問題。
+
+## 2026-08-11
+
+- CSS 參照修復新增清理失效 `@import` 規則；當 CSS 匯入的檔案不存在且找不到
+  可安全重連的同名資源時，會移除該 `@import`，避免 EPUBCheck 回報缺少被
+  引用資源。
+
+## 2026-08-07
+
+- OPF 清理新增移除 EPUB3 spine 上不合法的 `page-map` 屬性，避免固定版面或
+  直排書從舊工具轉出後觸發 EPUBCheck `RSC-005`。
+- OPF manifest 清理新增移除已被 XHTML 正規化後不再需要的 stale `switch`
+  property，避免 EPUBCheck 回報 `switch` 屬性沒有在內容文件中宣告。
+- CSS sanitizer 新增移除規則結尾後的中文註記，例如 `}（加標識"I"）`，避免
+  EPUBCheck 將註記文字解析成不合法 CSS token。
+
+## 2026-08-05
+
+- OPF/package 清理新增移除未登記且未使用的巢狀重複封面檔，例如
+  `OEBPS/OEBPS/cover.jpg`；若同層已有正式 `OEBPS/cover.jpg`，會避免把殘留
+  孤兒圖重新加入 manifest。
+- 固定版面 viewport 修復會同時辨識 spine itemref 上的
+  `rendition:layout-pre-paginated`；若頁面缺少 viewport，會從第一張本地圖片
+  的實際尺寸補上 `<meta name="viewport" ...>`，避免 EPUBCheck `HTM-046`。
+- `repair-only` XHTML 清理會把非 table 位置的 `<caption>` 改為合法的
+  `<figcaption>` 或 `<div>`，避免圖片 `<figure>` 裡的舊式 caption 觸發
+  EPUBCheck `RSC-005`。
+- OPF 清理會移除 manifest/itemref `properties` 裡不是 XML NMTOKEN 的殘留
+  token，例如 `viewport-width=1514, height=2048`，避免 EPUBCheck
+  `RSC-005` / `OPF-027`。
+- 官方 toc nav 清理會依 spine 閱讀順序重排同層目錄項，避免目錄連結倒退時
+  觸發 EPUBCheck `NAV-011`。
+- OPF metadata 清理會把非法的 `urn:uuid:*` 識別碼替換成合法 UUID，避免
+  EPUBCheck `OPF-085`。
+
+## 2026-08-03
+
+- `repair-only` OPF spine 清理新增處理 EPUBCheck `OPF-096`：若 XHTML
+  spine item 被標成 `linear="no"`，但整本書沒有任何超連結可到達該檔案，
+  會移除 `linear` 讓它回到主線閱讀；若正文或目錄仍有連結可達，則保留
+  非線性設定。
+- `repair-only` OPF manifest 清理新增 XHTML 內容特徵偵測：若 XHTML 檔案內含
+  SVG 或 MathML，會自動補上對應的 `properties="svg"` / `properties="mathml"`；
+  若修復後已不含 SVG 或 MathML，也會移除 stale property，避免 EPUBCheck
+  回報屬性缺少或不應宣告。
+
 ## 2026-08-01
 
 - OPF 清理新增 metadata/manifest XML id 衝突修復：manifest 與 spine 使用中的資源 id 會優先保留，metadata 中撞名的 `id` 會改為 `meta-...`，並同步 metadata 內 `refines`，避免 EPUBCheck 回報 `Duplicate "title"` 等錯誤。
