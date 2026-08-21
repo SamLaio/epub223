@@ -1,7 +1,29 @@
 # Change Log
 
-## 2026-08-15
+## 1.0 - 2026-08-21
 
+- 文字檔讀取新增 XML encoding 宣告偵測與 `cp950` / `big5` /
+  `gb18030` fallback；遇到舊書 XHTML/OPF 不是 UTF-8 時，修復流程會先正確
+  讀入，再由輸出流程統一寫回 UTF-8，避免非 UTF-8 原始檔中止轉換。
+- OPF metadata 清理新增移除 `<meta>` 上 EPUB3 不允許的私有屬性，例如
+  `lic`、`ver`、`url`；同時移除只有 `name` 但缺少 `content` 的 OPF
+  `<meta>`，避免 EPUBCheck 回報 OPF metadata 屬性不合法或缺必要
+  `content`。
+- 官方 nav 清理新增移除 `nav` 裡沒有可讀內容的空 `<div>`，包含常見的
+  `style="display: none"` 殘留節點，避免 EPUBCheck 回報 nav 結構中不允許
+  `div`。
+- OPF manifest 清理新增移除已被 XHTML 正規化後不再需要的 stale `scripted`
+  property；當 JavaScript 已由清理流程移除時，會同步清掉 manifest
+  `properties="scripted"`，避免 EPUBCheck 回報 scripted 不應宣告。
+- 固定版面 viewport 修復新增移除 stale 全域
+  `rendition:layout=pre-paginated`：當一般文字頁無法從圖片推得 viewport
+  尺寸時，會移除錯誤的全書固定版面宣告，避免 EPUBCheck `HTM-046`。
+- 官方 nav 清理新增移除沒有可讀文字的空 `<span>` 與 `<a>`，避免 Google
+  Books / Kobo 殘留錨點造成 EPUBCheck 回報 nav span/anchor 內容為空或
+  結構不合法。
+- 官方 nav 清理新增將 `nav` 內殘留的 `<ul>` / `<menu>` 轉成 EPUB3 合法
+  `<ol>`，保留原本目錄項目與層級，避免 EPUBCheck 回報 toc 裡不允許
+  unordered list。
 - 缺失 XHTML 資源修復流程新增空檔/不可解析檔案防護；掃描連結與快取
   anchor id 時若頁面解析不到 root，會跳過該檔而不是中止整本修復，避免
   圖像型或殘缺頁面造成 `NoneType.iter`。

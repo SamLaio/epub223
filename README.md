@@ -1,4 +1,4 @@
-# ePub223
+# ePub223 1.0
 
 這是把原本的 Sigil `ePub3-itizer` plugin 核心整理成獨立 CLI 專案的版本。
 

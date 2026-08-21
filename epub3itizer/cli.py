@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Iterator, List, Optional, Tuple
 
+from . import __version__
 from .conversion import convert_epub2_to_epub3
 from .repair import repair_epub
 
@@ -71,6 +72,7 @@ def _process_directory(
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert EPUB2 books into EPUB3, or repair EPUB packages in place.")
+    parser.add_argument("--version", action="version", version=f"epub223 {__version__}")
     parser.add_argument("input", help="Input .epub file or EPUB folder")
     parser.add_argument("-o", "--output", help="Output .epub file path for a single file input")
     parser.add_argument("--output-dir", help="Output directory for batch folder conversion")

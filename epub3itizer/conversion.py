@@ -222,10 +222,23 @@ def convert_named_entities(text: str) -> str:
 
 def read_text_file(path: Path) -> str:
     data = path.read_bytes()
-    for encoding in ("utf-8", "utf-8-sig"):
+    declared = re.search(br"""encoding\s*=\s*["']([^"']+)["']""", data[:256], re.IGNORECASE)
+    encodings = ["utf-8", "utf-8-sig"]
+    if declared:
+        try:
+            encodings.insert(0, declared.group(1).decode("ascii", errors="ignore"))
+        except Exception:
+            pass
+    encodings.extend(["cp950", "big5", "gb18030"])
+    seen: set[str] = set()
+    for encoding in encodings:
+        normalized = encoding.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
         try:
             return data.decode(encoding)
-        except UnicodeDecodeError:
+        except (LookupError, UnicodeDecodeError):
             continue
     return data.decode("utf-8", errors="strict")
 
@@ -1942,6 +1955,7 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
         if href:
             fixed_items.append(posixpath.normpath(posixpath.join(opf_dir, unquote(href))))
 
+    unresolved_fixed_items: List[str] = []
     for rel in dict.fromkeys(fixed_items):
         page_path = root_dir / Path(rel)
         if not page_path.exists():
@@ -1957,23 +1971,28 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
         head_matches = page_root.xpath(".//*[local-name()='head']")
         img_matches = page_root.xpath(".//*[local-name()='img' and @src]")
         if not head_matches or not img_matches:
+            unresolved_fixed_items.append(rel)
             continue
         img_src = img_matches[0].get("src", "")
         base, _frag = split_href(img_src)
         parts = urlsplit(base)
         if parts.scheme or parts.netloc or not base:
+            unresolved_fixed_items.append(rel)
             continue
         page_dir = posixpath.dirname(rel) or "."
         image_rel = posixpath.normpath(posixpath.join(page_dir, unquote(base)))
         image_path = root_dir / Path(image_rel)
         if not image_path.exists():
+            unresolved_fixed_items.append(rel)
             continue
         try:
             with Image.open(image_path) as image:
                 width, height = image.size
         except Exception:
+            unresolved_fixed_items.append(rel)
             continue
         if width <= 0 or height <= 0:
+            unresolved_fixed_items.append(rel)
             continue
         head = head_matches[0]
         meta = etree.Element(f"{{{XHTML_NS}}}meta")
@@ -1994,6 +2013,24 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
                 pretty_print=False,
             ).decode("utf-8"),
         )
+    if unresolved_fixed_items and has_global_fixed_layout:
+        changed = False
+        for meta in opf_root.xpath(".//*[local-name()='meta' and @property='rendition:layout']"):
+            if (meta.text or "").strip() == "pre-paginated":
+                parent = meta.getparent()
+                if parent is not None:
+                    parent.remove(meta)
+                    changed = True
+        if changed:
+            write_text_file(
+                opf_path,
+                etree.tostring(
+                    opf_root,
+                    encoding="utf-8",
+                    xml_declaration=True,
+                    pretty_print=False,
+                ).decode("utf-8"),
+            )
 
 
 def strip_links_from_legacy_toc_files(root_dir: Path, opf_href: str) -> None:
@@ -2183,6 +2220,10 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
         return
     changed = ensure_official_nav_has_toc(root)
     changed = flatten_pathological_single_chain_nav(root) or changed
+    for nav_list in root.xpath(".//*[local-name()='nav']//*[local-name()='ul' or local-name()='menu']"):
+        namespace = etree.QName(nav_list).namespace or XHTML_NS
+        nav_list.tag = f"{{{namespace}}}ol"
+        changed = True
     for heading in root.xpath(".//*[local-name()='nav']//*[local-name()='h1' or local-name()='h2' or local-name()='h3' or local-name()='h4' or local-name()='h5' or local-name()='h6']"):
         if not "".join(heading.itertext()).strip():
             heading.text = "Table of Contents"
@@ -2301,6 +2342,13 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
                         ol.remove(li)
                         ol.append(li)
                     changed = True
+    for elem in list(root.xpath(".//*[local-name()='nav']//*[local-name()='span' or local-name()='a' or local-name()='div']")):
+        if "".join(elem.itertext()).strip():
+            continue
+        parent = elem.getparent()
+        if parent is not None:
+            parent.remove(elem)
+            changed = True
     for ol in list(root.xpath(".//*[local-name()='nav']//*[local-name()='ol']")):
         if not any(isinstance(child.tag, str) and etree.QName(child).localname == "li" for child in ol):
             parent = ol.getparent()
@@ -2426,7 +2474,7 @@ def manifest_media_type_for_path(path: Path, href: str) -> str:
 
 
 def required_manifest_properties_for_xhtml(path: Path) -> List[str]:
-    """Return EPUB3 manifest properties required by SVG/MathML in XHTML."""
+    """Return EPUB3 manifest properties required by XHTML content."""
     if not path.exists() or path.suffix.lower() not in {".html", ".xhtml", ".htm"}:
         return []
     try:
@@ -2500,6 +2548,7 @@ def is_invalid_svg_resource(path: Path) -> bool:
 PRIVATE_OPF_PROPERTY_TOKENS = {"duokan-page-fitwindow", "duokan-page-fullscreen"}
 PRIVATE_OPF_META_PROPERTIES = {"hdf"}
 KNOWN_OPF_PROPERTY_PREFIXES = {"calibre", "dcterms", "media", "rendition"}
+OPF_META_ALLOWED_ATTRS = {"content", "dir", "id", "name", "property", "refines", "xml:lang"}
 
 
 def clean_opf_property_tokens(value: str) -> List[str]:
@@ -2840,7 +2889,7 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         if item.get("media-type") == "application/xhtml+xml":
             xhtml_path = root_dir / Path(posixpath.normpath(posixpath.join(opf_dir, unquote(href))))
             required_tokens = required_manifest_properties_for_xhtml(xhtml_path)
-            stale_tokens = [token for token in tokens if token in {"svg", "mathml", "switch"} and token not in required_tokens]
+            stale_tokens = [token for token in tokens if token in {"svg", "mathml", "switch", "scripted"} and token not in required_tokens]
             if stale_tokens:
                 tokens = [token for token in tokens if token not in stale_tokens]
                 if tokens:
@@ -3024,6 +3073,11 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             if attr.startswith("{%s}" % OPF_NS):
                 meta.set(etree.QName(attr).localname, meta.attrib.pop(attr))
                 changed = True
+        for attr in list(meta.attrib):
+            attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
+            if attr_local not in OPF_META_ALLOWED_ATTRS and attr != "{http://www.w3.org/XML/1998/namespace}lang":
+                meta.attrib.pop(attr, None)
+                changed = True
         if meta.get("scheme") is not None:
             meta.attrib.pop("scheme", None)
             changed = True
@@ -3065,10 +3119,19 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         prop = meta.get("property", "")
         text = (meta.text or "").strip()
         content = (meta.get("content") or "").strip()
+        name = (meta.get("name") or "").strip()
         if prop == "dcterms:modified":
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", text):
                 meta.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 changed = True
+            continue
+        if name and not content:
+            metadata.remove(meta)
+            changed = True
+            continue
+        if not prop and not name and not content and not text and not meta.get("refines"):
+            metadata.remove(meta)
+            changed = True
             continue
         refines = meta.get("refines", "")
         if prop and not text and not content:

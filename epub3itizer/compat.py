@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 import shutil
 import sys
 import tempfile
@@ -58,10 +59,23 @@ def convert_named_entities(text: str) -> str:
 
 def _read_text_file(path: Path) -> str:
     data = path.read_bytes()
-    for encoding in ("utf-8", "utf-8-sig"):
+    declared = re.search(br"""encoding\s*=\s*["']([^"']+)["']""", data[:256], re.IGNORECASE)
+    encodings = ["utf-8", "utf-8-sig"]
+    if declared:
+        try:
+            encodings.insert(0, declared.group(1).decode("ascii", errors="ignore"))
+        except Exception:
+            pass
+    encodings.extend(["cp950", "big5", "gb18030"])
+    seen: set[str] = set()
+    for encoding in encodings:
+        normalized = encoding.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
         try:
             return data.decode(encoding)
-        except UnicodeDecodeError:
+        except (LookupError, UnicodeDecodeError):
             continue
     return data.decode("utf-8", errors="strict")
 
