@@ -1,5 +1,26 @@
 # Change Log
 
+## 1.1 - 2026-08-29
+
+- XHTML 清理新增移除 `kmoetag` 私有屬性，避免 Kobo/商店來源殘留屬性造成
+  EPUBCheck 回報 XHTML 屬性不合法。
+- XHTML 與 OPF spine 清理擴充 KMOE 私有欄位處理，會移除 `kimageraw` 與
+  `kmoe-*` 類屬性，例如 `kmoe-pagedirect`，避免漫畫 EPUB 的私有閱讀器標記
+  造成 EPUBCheck 失敗。
+- OPF manifest 清理新增移除空白或檔頭無效的 raster 圖片資源，若只剩空檔或
+  非圖片內容會同步移除 manifest 項目與殘留檔案，避免 EPUBCheck
+  `MED-004` / `PKG-021`。
+- OPF metadata 清理新增移除空白的 Dublin Core 選填欄位，例如
+  `dc:source`、`dc:relation`、`dc:coverage`、`dc:rights`，避免 EPUBCheck
+  回報 metadata 文字內容長度不足。
+- XHTML 正規化新增修復：當樣式表 `<link rel="stylesheet">` 的 `type`
+  被舊製作工具誤寫為檔案路徑等非 MIME 值時，自動改為標準 `text/css`，避免
+  EPUBCheck 回報 stylesheet `type` 屬性不合法。
+- fixed-layout XHTML 修復新增 SVG 封面尺寸推論：若 spine itemref 宣告
+  `rendition:layout-pre-paginated`，但封面頁只用 `<svg viewBox="...">`
+  而沒有 `<img>`，會自動補上合法 `viewport` meta，避免 EPUBCheck 回報
+  fixed layout 文件缺少 viewport。
+
 ## 1.0 - 2026-08-21
 
 - 文字檔讀取新增 XML encoding 宣告偵測與 `cp950` / `big5` /

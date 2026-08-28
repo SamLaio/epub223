@@ -46,6 +46,19 @@ from epub3itizer.cli import parse_args  # noqa: E402
 from epub3itizer.repair import repair_epub  # noqa: E402
 
 
+def test_stylesheet_link_with_path_in_type_is_normalized_to_css_mime_type():
+    root = parse_xml_recovering(
+        '''<html xmlns="http://www.w3.org/1999/xhtml"><head>
+        <link rel="stylesheet" href="../Styles/book.css" type="../Text/css"/>
+        </head><body><p>text</p></body></html>'''
+    )
+
+    normalize_epubcheck_xhtml(root)
+
+    link = root.xpath(".//*[local-name()='link']")[0]
+    assert link.get("type") == "text/css"
+
+
 def test_opf_metadata_attrs_are_epub3_safe():
     opf2 = """<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid">
@@ -2743,6 +2756,33 @@ def test_fixed_layout_spine_itemref_gets_viewport_from_first_image(tmp_path):
     assert 'content="width=900, height=1200"' in output
 
 
+def test_fixed_layout_svg_cover_gets_viewport_from_viewbox(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "cover.xhtml").write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Cover</title><meta charset="utf-8"/></head>
+<body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 874 1240" width="100%" height="100%">
+<image width="874" height="1240" href="../Images/cover.jpg"/>
+</svg></body>
+</html>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "OEBPS" / "content.opf").write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata><meta property="rendition:layout">reflowable</meta></metadata>
+<manifest><item id="cover" href="Text/cover.xhtml" media-type="application/xhtml+xml" properties="svg"/></manifest>
+<spine><itemref idref="cover" properties="rendition:layout-pre-paginated rendition:spread-none"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    add_fixed_layout_viewports(tmp_path, "OEBPS/content.opf")
+
+    output = (tmp_path / "OEBPS" / "Text" / "cover.xhtml").read_text(encoding="utf-8")
+    assert 'name="viewport"' in output
+    assert 'content="width=874, height=1240"' in output
+
+
 def test_text_pages_remove_stale_global_fixed_layout_when_viewport_cannot_be_inferred(tmp_path):
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text(
@@ -3056,3 +3096,81 @@ def test_cleanup_opf_normalizes_existing_dc_language(tmp_path):
     data = opf.read_text(encoding="utf-8")
     assert "<dc:language>zh-TW</dc:language>" in data
     assert "zh_TW" not in data
+
+
+def test_private_kmoetag_xhtml_attribute_is_removed():
+    root = parse_xml_recovering(
+        '''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p kmoetag="1" kimageraw="true" kmoe-marker="x" class="keep">text</p>
+        </body></html>'''
+    )
+
+    normalize_epubcheck_xhtml(root)
+
+    data = etree.tostring(root, encoding="unicode")
+    assert "kmoetag" not in data
+    assert "kimageraw" not in data
+    assert "kmoe-marker" not in data
+    assert 'class="keep"' in data
+
+
+def test_cleanup_opf_removes_empty_dc_metadata_and_invalid_raster_images(tmp_path):
+    (tmp_path / "OEBPS" / "Images").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Images" / "empty.jpg").write_bytes(b"")
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>Sample</dc:title>
+<dc:language>zh-Hant</dc:language>
+<dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+<dc:source></dc:source>
+<dc:relation/>
+<dc:coverage>  </dc:coverage>
+<dc:rights/>
+</metadata>
+<manifest>
+  <item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/>
+  <item id="bad-image" href="Images/empty.jpg" media-type="image/jpeg"/>
+</manifest>
+<spine><itemref idref="chapter"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert "<dc:source" not in data
+    assert "<dc:relation" not in data
+    assert "<dc:coverage" not in data
+    assert "<dc:rights" not in data
+    assert "empty.jpg" not in data
+    assert not (tmp_path / "OEBPS" / "Images" / "empty.jpg").exists()
+
+
+def test_cleanup_opf_removes_kmoe_spine_private_attrs(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>Sample</dc:title>
+<dc:language>zh-Hant</dc:language>
+<dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+</metadata>
+<manifest><item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine kmoe-pagedirect="rtl"><itemref idref="chapter" kmoe-pagedirect="rtl"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert "kmoe-pagedirect" not in data
+    assert "<spine>" in data
+    assert 'idref="chapter"' in data

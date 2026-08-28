@@ -58,6 +58,8 @@ PRIVATE_RESIDUE_FILENAMES = {"provider.txt"}
 PRIVATE_CSS_PROPERTIES = {"duokan-text-indent", "text-spacing-trim"}
 LIST_CONTAINER_ELEMENTS = {"menu", "ol", "ul"}
 FOREIGN_IMAGE_SUFFIXES = {".emf", ".wmf"}
+RASTER_IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+PRIVATE_XHTML_ATTRS = {"kimageraw", "kmoetag"}
 PHRASING_PARENT_ELEMENTS = {
     "a",
     "abbr",
@@ -906,6 +908,19 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
         if namespace == XHTML_NS and parent_local == "head" and local == "style" and elem.text:
             elem.text = sanitize_css(elem.text)
 
+        if namespace == XHTML_NS and local == "link":
+            rel_tokens = set(elem.get("rel", "").lower().split())
+            link_type = elem.get("type", "").strip()
+            if "stylesheet" in rel_tokens and link_type:
+                if not re.fullmatch(r"(?!\.{1,2}/)[^/\s]+/[^/\s]+(?:\s*;.*)?", link_type):
+                    # EPUB requires a MIME type here; legacy exports sometimes put a path in it.
+                    elem.set("type", "text/css")
+                elif link_type.lower().split(";", 1)[0].strip() != "text/css":
+                    parent = elem.getparent()
+                    if parent is not None:
+                        parent.remove(elem)
+                    continue
+
         if namespace == XHTML_NS and parent_local != "head" and local == "title":
             elem.tag = f"{{{XHTML_NS}}}span"
             local = "span"
@@ -1068,6 +1083,8 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
             elif namespace == XHTML_NS and attr_lower == "cite":
                 del elem.attrib[attr]
             elif namespace == XHTML_NS and attr_lower == "body":
+                del elem.attrib[attr]
+            elif namespace == XHTML_NS and (attr_lower in PRIVATE_XHTML_ATTRS or attr_lower.startswith("kmoe-")):
                 del elem.attrib[attr]
             elif namespace == XHTML_NS and attr_lower in {"times", "new", "roman", "serif", "tooltip"}:
                 del elem.attrib[attr]
@@ -1921,8 +1938,6 @@ def convert_bmp_images(root_dir: Path) -> None:
 
 
 def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
-    if Image is None:
-        return
     opf_path = root_dir / Path(opf_href)
     if not opf_path.exists():
         return
@@ -1969,8 +1984,16 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
         if page_root.xpath(".//*[local-name()='head']/*[local-name()='meta' and translate(@name, 'VIEWPORT', 'viewport')='viewport']"):
             continue
         head_matches = page_root.xpath(".//*[local-name()='head']")
+        if not head_matches:
+            unresolved_fixed_items.append(rel)
+            continue
+        svg_viewport = _infer_svg_viewport(page_root)
+        if svg_viewport:
+            width, height = svg_viewport
+            _insert_viewport_meta(head_matches[0], page_root, page_path, width, height)
+            continue
         img_matches = page_root.xpath(".//*[local-name()='img' and @src]")
-        if not head_matches or not img_matches:
+        if Image is None or not img_matches:
             unresolved_fixed_items.append(rel)
             continue
         img_src = img_matches[0].get("src", "")
@@ -1994,25 +2017,7 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
         if width <= 0 or height <= 0:
             unresolved_fixed_items.append(rel)
             continue
-        head = head_matches[0]
-        meta = etree.Element(f"{{{XHTML_NS}}}meta")
-        meta.set("name", "viewport")
-        meta.set("content", f"width={width}, height={height}")
-        charset_metas = head.xpath("./*[local-name()='meta' and @charset]")
-        if charset_metas:
-            head.insert(head.index(charset_metas[-1]) + 1, meta)
-        else:
-            head.insert(0, meta)
-        write_text_file(
-            page_path,
-            etree.tostring(
-                page_root,
-                encoding="utf-8",
-                xml_declaration=True,
-                doctype="<!DOCTYPE html>",
-                pretty_print=False,
-            ).decode("utf-8"),
-        )
+        _insert_viewport_meta(head_matches[0], page_root, page_path, width, height)
     if unresolved_fixed_items and has_global_fixed_layout:
         changed = False
         for meta in opf_root.xpath(".//*[local-name()='meta' and @property='rendition:layout']"):
@@ -2031,6 +2036,62 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
                     pretty_print=False,
                 ).decode("utf-8"),
             )
+
+
+def _infer_svg_viewport(page_root: etree._Element) -> Optional[Tuple[int, int]]:
+    for svg in page_root.xpath(".//*[local-name()='svg']"):
+        view_box = svg.get("viewBox") or svg.get("viewbox")
+        if view_box:
+            parts = re.split(r"[\s,]+", view_box.strip())
+            if len(parts) == 4:
+                try:
+                    width = round(float(parts[2]))
+                    height = round(float(parts[3]))
+                    if width > 0 and height > 0:
+                        return width, height
+                except ValueError:
+                    pass
+        width = _numeric_dimension(svg.get("width"))
+        height = _numeric_dimension(svg.get("height"))
+        if width and height:
+            return width, height
+        for image in svg.xpath(".//*[local-name()='image']"):
+            width = _numeric_dimension(image.get("width"))
+            height = _numeric_dimension(image.get("height"))
+            if width and height:
+                return width, height
+    return None
+
+
+def _numeric_dimension(value: str | None) -> Optional[int]:
+    if not value:
+        return None
+    match = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)(?:px|pt)?\s*", value)
+    if not match:
+        return None
+    number = round(float(match.group(1)))
+    return number if number > 0 else None
+
+
+def _insert_viewport_meta(head: etree._Element, page_root: etree._Element, page_path: Path, width: int, height: int) -> None:
+    meta = etree.Element(f"{{{XHTML_NS}}}meta")
+    meta.set("name", "viewport")
+    meta.set("content", f"width={width}, height={height}")
+    charset_metas = head.xpath("./*[local-name()='meta' and @charset]")
+    if charset_metas:
+        head.insert(head.index(charset_metas[-1]) + 1, meta)
+    else:
+        head.insert(0, meta)
+    write_text_file(
+        page_path,
+        etree.tostring(
+            page_root,
+            encoding="utf-8",
+            xml_declaration=True,
+            doctype="<!DOCTYPE html>",
+            pretty_print=False,
+        ).decode("utf-8"),
+    )
 
 
 def strip_links_from_legacy_toc_files(root_dir: Path, opf_href: str) -> None:
@@ -2545,6 +2606,17 @@ def is_invalid_svg_resource(path: Path) -> bool:
     return not data.strip() or "<svg" not in data.lower()
 
 
+def is_invalid_raster_image_resource(path: Path) -> bool:
+    if path.suffix.lower() not in RASTER_IMAGE_SUFFIXES:
+        return False
+    try:
+        if path.stat().st_size == 0:
+            return True
+    except OSError:
+        return True
+    return sniff_image_kind(path) is None
+
+
 PRIVATE_OPF_PROPERTY_TOKENS = {"duokan-page-fitwindow", "duokan-page-fullscreen"}
 PRIVATE_OPF_META_PROPERTIES = {"hdf"}
 KNOWN_OPF_PROPERTY_PREFIXES = {"calibre", "dcterms", "media", "rendition"}
@@ -2803,6 +2875,7 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             is_javascript_resource(href, item.get("media-type", ""))
             or is_private_residue_path(item_path)
             or Path(unquote(href)).suffix.lower() in FOREIGN_IMAGE_SUFFIXES
+            or is_invalid_raster_image_resource(root_dir / Path(item_path))
             or is_invalid_svg_resource(root_dir / Path(item_path))
             or Path(unquote(href)).suffix.lower() == ".ncx"
             or item.get("media-type") == "application/x-dtbncx+xml"
@@ -2936,12 +3009,12 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             changed = True
     manifest_ids = {item.get("id", "") for item in manifest_items()}
     if spine is not None:
-        if spine.get("toc"):
-            spine.attrib.pop("toc", None)
-            changed = True
-        if spine.get("page-map"):
-            spine.attrib.pop("page-map", None)
-            changed = True
+        for attr in list(spine.attrib):
+            attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
+            attr_lower = attr_local.lower()
+            if attr_lower in {"toc", "page-map"} or attr_lower.startswith("kmoe-"):
+                spine.attrib.pop(attr, None)
+                changed = True
         hyperlinked_xhtml_targets = collect_hyperlinked_xhtml_targets(root_dir, opf_dir)
         has_xhtml_spine_item = False
         for itemref in spine_itemrefs():
@@ -2954,7 +3027,8 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         for itemref in spine_itemrefs():
             for attr in list(itemref.attrib):
                 attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
-                if attr_local in PRIVATE_OPF_PROPERTY_TOKENS:
+                attr_lower = attr_local.lower()
+                if attr_lower in PRIVATE_OPF_PROPERTY_TOKENS or attr_lower.startswith("kmoe-"):
                     itemref.attrib.pop(attr, None)
                     changed = True
             idref = itemref.get("idref", "")
@@ -3032,6 +3106,11 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             changed = True
             continue
         if isinstance(elem.tag, str) and etree.QName(elem).namespace == DC_NS and etree.QName(elem).localname != "meta":
+            local = etree.QName(elem).localname
+            if local not in {"identifier", "language", "title"} and not (elem.text or "").strip():
+                metadata.remove(elem)
+                changed = True
+                continue
             for attr in list(elem.attrib):
                 attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
                 if attr_local not in {"dir", "id", "lang"} and attr != "{http://www.w3.org/XML/1998/namespace}lang":
