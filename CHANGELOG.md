@@ -1,5 +1,19 @@
 # Change Log
 
+## 1.2 - 2026-09-03
+
+- OPF 清理新增正規化 `<package xml:lang>` 的修復；若 package 層殘留
+  `xml:lang="z"` 等不合法語言碼，會依 metadata 語言改為合法值，避免
+  EPUBCheck `OPF-092`。
+- OPF manifest 清理新增移除指向不存在 manifest id 的 `fallback` 屬性，避免
+  EPUBCheck `OPF-040`。
+- XHTML 清理新增同一 `head` 只保留一個 `meta charset` 的修復；若舊檔同時有
+  `<meta charset="...">` 與 `Content-Type ... charset=...`，會保留單一
+  UTF-8 宣告，避免 EPUBCheck 回報同一文件有多個 charset meta。
+- 前置檔名空白修復與路徑大小寫修復遇到不可讀的舊 NCX 或其他文字檔時會跳過
+  內容改寫，讓後續 manifest/NCX 清理規則接手移除或修復，避免亂碼 NCX 在修復
+  流程初期就中止。
+
 ## 1.1 - 2026-08-29
 
 - XHTML 清理新增移除 `kmoetag` 私有屬性，避免 Kobo/商店來源殘留屬性造成

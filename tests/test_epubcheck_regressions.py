@@ -37,6 +37,7 @@ from epub3itizer.conversion import (  # noqa: E402
     required_manifest_properties_for_xhtml,
     sanitize_all_css_files,
     sanitize_css,
+    sanitize_package_filenames,
     sanitize_style_value,
     sync_ncx_uid,
     normalize_language_tag,
@@ -1159,6 +1160,51 @@ def test_xhtml_meta_without_required_content_is_repaired_or_removed():
     assert viewport[0].get("width") is None
     assert '<meta charset="utf-8"/>' in output
     assert 'http-equiv="Content-Type"' not in output
+
+
+def test_duplicate_charset_meta_is_deduped():
+    root = etree.fromstring(
+        b"""<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8"/>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<title>Title</title>
+</head>
+<body><p>body</p></body>
+</html>"""
+    )
+
+    output, _, _, _ = collect_doc_features(root, "Text/chapter01.xhtml")
+    out_root = etree.fromstring(output.encode("utf-8"))
+    charset_metas = out_root.xpath("//*[local-name()='head']/*[local-name()='meta' and @charset]")
+
+    assert len(charset_metas) == 1
+    assert "http-equiv" not in output
+
+
+def test_filename_sanitizer_skips_unreadable_legacy_ncx(tmp_path):
+    (tmp_path / "META-INF").mkdir()
+    (tmp_path / "META-INF" / "container.xml").write_text("container", encoding="utf-8")
+    (tmp_path / "toc bad.ncx").write_bytes(b":\xe4Il\x1c)Z\xb6]\xa6\xa2\x90")
+    page = tmp_path / "chapter one.xhtml"
+    page.write_text('<a href="chapter one.xhtml">chapter</a>', encoding="utf-8")
+
+    sanitize_package_filenames(tmp_path)
+
+    assert (tmp_path / "toc_bad.ncx").exists()
+    assert (tmp_path / "chapter_one.xhtml").exists()
+
+
+def test_case_mismatch_repair_skips_unreadable_legacy_ncx(tmp_path):
+    (tmp_path / "toc.ncx").write_bytes(b":\xe4Il\x1c)Z\xb6]\xa6\xa2\x90")
+    (tmp_path / "Images").mkdir()
+    (tmp_path / "Images" / "Cover.jpg").write_bytes(b"image")
+    page = tmp_path / "chapter.xhtml"
+    page.write_text('<img src="images/cover.jpg" alt="cover"/>', encoding="utf-8")
+
+    fix_case_mismatched_local_hrefs(tmp_path)
+
+    assert 'src="Images/Cover.jpg"' in page.read_text(encoding="utf-8")
 
 
 def test_invalid_dl_children_are_wrapped_as_dd():
@@ -3096,6 +3142,64 @@ def test_cleanup_opf_normalizes_existing_dc_language(tmp_path):
     data = opf.read_text(encoding="utf-8")
     assert "<dc:language>zh-TW</dc:language>" in data
     assert "zh_TW" not in data
+
+
+def test_cleanup_opf_normalizes_package_xml_lang(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="z">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>Sample</dc:title>
+<dc:language>zh-Hant</dc:language>
+<dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+</metadata>
+<manifest><item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="chapter"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert 'xml:lang="zh-Hant"' in data
+    assert 'xml:lang="z"' not in data
+
+
+def test_cleanup_opf_removes_missing_manifest_fallback_id(tmp_path):
+    (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Images").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    (tmp_path / "OEBPS" / "Images" / "chapter.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f"
+        b"\x00\x01\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>Sample</dc:title>
+<dc:language>zh-Hant</dc:language>
+<dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+</metadata>
+<manifest>
+<item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/>
+<item id="chapter-image" href="Images/chapter.png" media-type="image/png" fallback="chapter-image-placeholder"/>
+</manifest>
+<spine><itemref idref="chapter"/></spine>
+</package>""",
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+
+    data = opf.read_text(encoding="utf-8")
+    assert 'id="chapter-image"' in data
+    assert "chapter-image-placeholder" not in data
+    assert "fallback=" not in data
 
 
 def test_private_kmoetag_xhtml_attribute_is_removed():

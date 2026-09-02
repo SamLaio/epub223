@@ -324,7 +324,10 @@ def sanitize_package_filenames(root_dir: Path) -> None:
     for path in root_dir.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in text_suffixes:
             continue
-        data = read_text_file(path)
+        try:
+            data = read_text_file(path)
+        except UnicodeDecodeError:
+            continue
         updated = data
         for old, new in replacements:
             updated = updated.replace(old, new)
@@ -719,6 +722,29 @@ def normalize_head_meta_children(root: etree._Element) -> None:
             meta.text = None
 
 
+def dedupe_head_charset_metas(root: etree._Element) -> None:
+    for head in root.xpath(".//*[local-name()='head']"):
+        charset_seen = False
+        for meta in list(head.xpath("./*[local-name()='meta']")):
+            has_charset = meta.get("charset") is not None or "charset" in (meta.get("content") or "").lower()
+            if not has_charset:
+                continue
+            meta.attrib.clear()
+            meta.set("charset", "utf-8")
+            if charset_seen:
+                parent = meta.getparent()
+                if parent is not None:
+                    if meta.tail:
+                        previous = meta.getprevious()
+                        if previous is not None:
+                            previous.tail = (previous.tail or "") + meta.tail
+                        else:
+                            parent.text = (parent.text or "") + meta.tail
+                    parent.remove(meta)
+                continue
+            charset_seen = True
+
+
 def normalize_html_root_structure(root: etree._Element) -> None:
     if not isinstance(root.tag, str) or etree.QName(root).localname != "html":
         return
@@ -809,6 +835,7 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
     normalize_html_root_structure(root)
     normalize_head_meta_children(root)
     normalize_head_text(root)
+    dedupe_head_charset_metas(root)
     wrap_body_bare_text(root)
     normalize_definition_lists(root)
     normalize_list_structures(root)
@@ -1304,6 +1331,7 @@ def collect_doc_features(root: etree._Element, book_href: str) -> Tuple[str, Lis
         if "charset" in content.lower() or meta.get("charset") is not None:
             meta.attrib.clear()
             meta.set("charset", "utf-8")
+    dedupe_head_charset_metas(root)
 
     if root.xpath(".//x:svg", namespaces=ns) or root.xpath(".//svg:svg", namespaces={"svg": "http://www.w3.org/2000/svg"}):
         manifest_properties.append("svg")
@@ -1678,7 +1706,10 @@ def fix_case_mismatched_local_hrefs(root_dir: Path) -> None:
         if not path.is_file() or path.suffix.lower() not in text_suffixes:
             continue
         current_rel = path.relative_to(root_dir).as_posix()
-        data = read_text_file(path)
+        try:
+            data = read_text_file(path)
+        except UnicodeDecodeError:
+            continue
         updated = re.sub(r'\b(href|src)="([^"]+)"', attr_repl, data)
         updated = re.sub(r"url\(\s*(['\"]?)([^)'\"]+)\1\s*\)", css_repl, updated)
         if updated != data:
@@ -2993,6 +3024,16 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                 else:
                     item.attrib.pop("properties", None)
                 changed = True
+    current_manifest_ids = {item.get("id", "") for item in manifest_items()}
+    for item in manifest_items():
+        fallback = item.get("fallback", "")
+        if fallback in id_renames:
+            item.set("fallback", id_renames[fallback])
+            fallback = item.get("fallback", "")
+            changed = True
+        if fallback and (fallback == item.get("id", "") or fallback not in current_manifest_ids):
+            item.attrib.pop("fallback", None)
+            changed = True
     if spine is None:
         spine = etree.Element(f"{{{OPF_NS}}}spine")
         root.insert(root.index(manifest) + 1, spine)
@@ -3260,6 +3301,14 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
         language = languages[0] if languages else etree.SubElement(metadata, f"{{{DC_NS}}}language")
         language.text = "zh-Hant"
         changed = True
+    package_lang_attr = "{http://www.w3.org/XML/1998/namespace}lang"
+    package_lang = root.get(package_lang_attr)
+    if package_lang is not None:
+        normalized_package_lang = normalize_language_tag(package_lang)
+        metadata_language = next(((language.text or "").strip() for language in languages if (language.text or "").strip()), "")
+        if package_lang != normalized_package_lang:
+            root.set(package_lang_attr, metadata_language or normalized_package_lang)
+            changed = True
     identifiers = list(metadata.findall(f"{{{DC_NS}}}identifier"))
     for ident in list(identifiers):
         if not (ident.text or "").strip():
