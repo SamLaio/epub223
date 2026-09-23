@@ -1,5 +1,9 @@
 # ePub223 1.2
 
+格式修復會辨識內容以 `%PDF-` 開頭、但誤標成 CSS 的二進位資源，修正 OPF media type 並避免將其當成文字樣式表改寫。
+
+既有來源廣告清理也會移除完整的 ePUBw「本書由…整理，…提供最新最全的優質電子書下載」宣傳段落，支援繁簡及跨行內標籤；不因正文提及網站名就刪除整段。
+
 這是把原本的 Sigil `ePub3-itizer` plugin 核心整理成獨立 CLI 專案的版本。
 
 用途很單純：
@@ -11,6 +15,35 @@
 
 ## 功能
 
+- XHTML 的 `a`、`ins`、`del` 依 HTML 透明內容模型繼承外層限制；
+  合法的區塊連結內 `p`、`hr` 保留，不再一律改成 `span`，避免目錄段落併行。
+  若外層仍限制行內內容，則維持必要的結構修復。
+  依據：[HTML 透明內容模型](https://html.spec.whatwg.org/multipage/dom.html#transparent-content-models)。
+
+### Kindle 橫排流式副本（選用）
+
+```powershell
+python -m epub3itizer.kindle "原書.epub" "Kindle橫排.epub" --language zh-Hant
+```
+
+此入口額外使用 `tinycss2`（未安裝時執行 `python -m pip install tinycss2`），
+僅適用 EPUB3 文字書，普通轉換／`--repair-only` 不會自動套用。
+它將直排 CSS 改為橫排、spine 改為由左至右、取消混合固定頁面，
+把無裁切的單圖 SVG 包裝改成可縮放插圖。`--language` 只在確認內容語言後指定，
+同步 OPF 與 XHTML 根元素，不改內文局部外語標記。
+不接受輸入輸出同檔；全書固定版面、絕對定位或複雜 SVG 會停止，不能拿來自動重排漫畫。
+輸出後仍應執行 EPUBCheck，並重新傳送至 Kindle 確認能否調整字級。
+
+相容性依據為 [Amazon 正體中文出版方向說明](https://kdp.amazon.com/en_US/help/topic/G27T64E65VM6JWKK)
+及 [流式排版指引](https://kdp.amazon.com/en_US/help/topic/GPNJPYK298J8TRRV)。
+KDP 與 Send-to-Kindle 並非同一服務，這些是相容性參考，不是雲端驗收保證。
+先檢視 calibre EPUB 匯入與封面處理的參考思路，未移植其程式碼；此模式屬選用排版轉換，
+不是將合法的直排或混合版面一律當成 EPUB 格式錯誤。
+
+### 一般轉換與修復
+
+- 多個 `cover-image` 衝突僅在 OPF 既有封面 metadata 唯一指定其中一張圖片時自動排除其他封面標記；不刪圖片，不猜測不明確的封面。
+
 - 保留原本的 EPUB2 -> EPUB3 轉換邏輯
 - 直接從命令列處理單檔
 - 資料夾批次轉換
@@ -20,10 +53,17 @@
 - 可選擇把 EPUB 內可讀文字從簡體中文轉成臺灣正體中文
 - 轉換與修復流程會清理常見閱讀器或平台殘留，例如 `calibre_bookmarks.txt`、`Provider.txt`，以及 EPUBCheck 不友善或閱讀器私有的 CSS 宣告如 `text-combine-horizontal: all;`、`text-combine: horizontal;`、`text-spacing-trim: trim-start;`、`duokan-text-indent: 0;`
 - XHTML 清理會移除少數明確來源廣告，例如 `請看小說網` / `qinkan.net`、`言情兔` / `yanqingtu.com` 宣傳短段與正文中的站台浮水印；段落規則需同時命中站台識別與廣告語，避免誤刪正文
+- XHTML 清理會移除與元素同名、或空值且名稱像 HTML 標籤名的非法屬性，例如 `<div div="">`、`<div i="">`，這類常見於轉檔器錯把破碎標籤殘片保留下來的情況
+- XHTML 樣式表 `<link>` 若將資源路徑錯寫於 `src`、卻未寫 `href`，會保留路徑並移至標準 `href` 屬性，避免 EPUBCheck 將 `src` 視為非法屬性
+- XHTML 正文的舊式 `<image>` 元素會改為標準 `<img>`，但 SVG 命名空間內的 `<image>` 保留；修復時也會依圖檔檔頭更正錯置的 JPEG／PNG／GIF／WebP／TIFF 副檔名並回寫所有引用
+- XHTML 清理會移除 AZW3/Calibre 轉檔後掉進正文的孤兒標籤殘片，例如 `id="_idParaDest..." class="..." aid="..."&gt;` 或 `d="footnote-..." class="_idFootnote" ...&gt;`，並移除 `aid` 私有屬性；這類問題可能通過 EPUBCheck，但會在閱讀器中顯示成錯誤內文
+- XHTML 清理會移除已棄用的 ARIA `role="doc-*"` 註腳角色，例如 `doc-endnote`、`doc-endnotes`、`doc-backlink`，但保留 EPUB 標準的 `epub:type="footnote"`／`footnotes` 與其他非 `doc-*` ARIA 角色，避免 EPUBCheck `RSC-017` 警告
 - 目錄頁修復會整理空 `<dd/>` 的舊式 `<dl>` 目錄、把官方 nav 檔中只有 `<div><ul>` 的普通目錄補成 EPUB3 需要的 `<nav epub:type="toc">`，並攤平製作器誤產生的單鏈巢狀 nav，讓章節維持可點擊且階層合理
+- 修復 SVG 圖像式目錄內遺失或重複資料夾的 `xlink:href` 章節連結，依實際 XHTML 檔案回寫為正確相對路徑
 - CSS 清理會移除重複屬性宣告，例如重複的 `font-weight`、`border-top`、`border-bottom`、`border-left`、`border-right`；同名屬性保留最後一次宣告，以符合 CSS cascade 語意並降低 Sigil 檢查書本警告
 - 修復流程會整理官方 `nav.xhtml`，例如把可能造成 `NAV-011` 閱讀順序警告的父層目錄連結降級為純文字；父層若指到晚於子項目的 spine 位置，會保留子章節連結並移除父層 href；同一檔案內 fragment 後的裸連結會被降級並由既有空 leaf 清理移除，保留可判定順序的子章節連結
 - OPF 清理會保留 manifest/spine 使用中的資源 id，並將 metadata 中撞名的 `id` 改成安全名稱，避免 EPUBCheck 回報 `Duplicate "title"` 等 XML id 衝突
+- EPUB2 OPF 中緊接文字的 XML 註解（例如 `<!--accessibility options-->`）會正確略過，不會誤把後續 manifest／spine 包入 metadata。
 
 ## 專案結構
 

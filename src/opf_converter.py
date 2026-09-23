@@ -473,6 +473,8 @@ class Opf_Converter(object):
     #    tname: tag name,    ttype: tag type ('begin', 'end' or 'single');
     #    tattr: dictionary of tag atributes
     def _parsetag(self, s):
+        if s.startswith('<!--'):
+            return 'single', '!--', {'comment': s[4:-3].strip()}
         n = len(s)
         p = 1
         tname = None

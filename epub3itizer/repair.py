@@ -16,6 +16,7 @@ __all__ = [
 def repair_epub_contents(root_dir: Path, opf_href: str) -> None:
     """Run the reusable EPUB repair pipeline in-place."""
     conv.convert_bmp_images(root_dir)
+    conv.normalize_raster_image_extensions(root_dir)
     conv.fix_case_mismatched_local_hrefs(root_dir)
     conv.repair_missing_xhtml_references(root_dir)
     conv.repair_missing_css_references(root_dir)

@@ -1,5 +1,50 @@
 # Change Log
 
+## 2026-09-07
+
+- 沿用既有來源廣告清理，新增 ePUBw 完整下載宣傳句的繁簡比對，保留周圍正文及一般網站名引用；加入跨行內標籤、繁簡與段落尾文回歸測試。
+
+## 1.3 - 2026-09-23
+
+- XHTML 正規化現在會將樣式表 `<link>` 錯寫的 `src` 屬性移至標準 `href`。保留原本路徑並避免 EPUBCheck `RSC-005` 對 `<link src="...">` 的屬性錯誤；加入回歸測試。
+
+- XHTML 正規化會移除已棄用的 ARIA `role="doc-*"` 註腳角色，保留 `epub:type` 與其他 ARIA 角色，避免 EPUBCheck `RSC-017` 的 `doc-endnote`／`doc-endnotes`／`doc-backlink` 警告；加入回歸測試。
+
+- XHTML 正文中的舊式 `<image>` 元素改為標準 `<img>`；SVG 命名空間內的圖像元素不動。另依實際檔頭將 JPEG／PNG／GIF／WebP／TIFF 圖像更正為相符副檔名並回寫引用，避免 EPUBCheck `RSC-005` 與 `PKG-022`；加入回歸測試。
+
+- SVG 圖像式目錄的 `<a xlink:href>` 現在會套用遺失 XHTML 連結修復。遇到
+  `xhtml/xhtml/p-005.xhtml` 這類重複資料夾路徑時，會依實際檔案回寫為
+  `p-005.xhtml`，避免 EPUBCheck `RSC-007`；加入回歸測試。
+
+- 修正內容實為 PDF、但副檔名與 manifest 類型誤標為 CSS 時被當作 UTF-8 樣式表解碼而中止的問題；改由檔頭辨識為 PDF、修正 media type，並保留原始二進位內容。
+
+- 修正 EPUB2 OPF 中無前導空白的 XML 註解被誤判為未閉合元素，造成 manifest／spine 錯誤落入 metadata 的問題；加入結構回歸測試。
+
+- 修正把 `a`、`ins`、`del` 一律視為行內容器的判斷，改為繼承外層內容模型。
+  保留合法區塊連結中的段落及分隔線，避免《綠猴劫》目錄的段落被改為 `span` 而併行。
+  加入合法、巢狀透明容器與受行內限制案例的回歸測試；參考 calibre 的 HTML5
+  解析策略及 HTML 標準，不移植第三方程式碼。
+
+- 新增選用的 `python -m epub3itizer.kindle`，為 EPUB3 文字書另外製作橫排流式
+  Kindle 副本。統一閱讀方向、移除混合固定頁面設定，將無裁切的單圖 SVG
+  包裝改為等比例圖片，並可明確指定內容語言。保留原書，普通修復不自動套用。
+  絕對定位、全書固定版面或複雜 SVG 會停止，避免破壞圖文內容。
+  EPUBCheck 通過不代表 Amazon 雲端一定啟用流式排版，仍須重新傳送確認。
+
+- OPF 同時將多張圖片標成 `cover-image` 時，若既有 `meta name="cover"`
+  唯一指向其中一張，移除其他圖片的封面標記，保留圖片與其他屬性。
+  無明確指定或指定互相衝突時不猜測。參考 calibre 封面唯一屬性的處理思路，未移植程式碼。
+
+- XHTML 清理新增移除 AZW3/Calibre 轉檔後掉入正文的孤兒 HTML 屬性殘片，
+  例如 `id="_idParaDest..." class="..." aid="..."&gt;` 或
+  `d="footnote-..." class="_idFootnote" ...&gt;`。這類殘片可能不會讓
+  EPUBCheck 失敗，但會在閱讀器正文中顯示錯誤文字。
+- XHTML 清理新增移除 Calibre/AZW3 來源殘留的 `aid` 私有屬性，避免章名段落
+  等元素通過前段修復後仍被 EPUBCheck 回報屬性不合法。
+- XHTML 清理新增移除與元素同名、或空值且名稱像 HTML 標籤名的非法屬性，
+  例如 Calibre 轉檔偶發產生的 `<div div="">`、`<div i="">`，避免
+  EPUBCheck 回報該屬性不允許使用。
+
 ## 1.2 - 2026-09-03
 
 - OPF 清理新增正規化 `<package xml:lang>` 的修復；若 package 層殘留

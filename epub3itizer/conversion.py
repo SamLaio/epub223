@@ -59,7 +59,7 @@ PRIVATE_CSS_PROPERTIES = {"duokan-text-indent", "text-spacing-trim"}
 LIST_CONTAINER_ELEMENTS = {"menu", "ol", "ul"}
 FOREIGN_IMAGE_SUFFIXES = {".emf", ".wmf"}
 RASTER_IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
-PRIVATE_XHTML_ATTRS = {"kimageraw", "kmoetag"}
+PRIVATE_XHTML_ATTRS = {"aid", "kimageraw", "kmoetag"}
 PHRASING_PARENT_ELEMENTS = {
     "a",
     "abbr",
@@ -102,6 +102,7 @@ XHTML_TAG_RENAMES = {
     "defaultcase": "div",
     "do": "span",
     "fa": "span",
+    "h": "p",
     "la": "span",
     "mi": "span",
     "order": "span",
@@ -117,6 +118,13 @@ XHTML_TAG_RENAMES = {
 }
 SAFE_RENAMED_TAG_ATTRS = {"class", "id", "lang", "style", "title", "xml:lang"}
 HTML5_NAME_ELEMENTS = {"button", "fieldset", "form", "iframe", "input", "map", "meta", "object", "output", "param", "select", "textarea"}
+HTML_TAG_NAME_ATTR_RESIDUES = (
+    PHRASING_PARENT_ELEMENTS
+    | BLOCK_TO_INLINE_ELEMENTS
+    | HTML5_DIMENSION_ELEMENTS
+    | LIST_CONTAINER_ELEMENTS
+    | {"br", "caption", "col", "colgroup", "dd", "dt", "figcaption", "hr", "label", "tbody", "tfoot", "thead", "th", "tr"}
+)
 XML_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 OPF_PROPERTY_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 DC_METADATA_ELEMENTS = {
@@ -885,6 +893,13 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
 
         parent = elem.getparent()
         parent_local = etree.QName(parent).localname if parent is not None and isinstance(parent.tag, str) else ""
+        # Transparent HTML containers inherit the surrounding content model.
+        content_parent = parent
+        while content_parent is not None and content_parent.tag in {
+            f"{{{XHTML_NS}}}a", f"{{{XHTML_NS}}}ins", f"{{{XHTML_NS}}}del"
+        }:
+            content_parent = content_parent.getparent()
+        content_parent_local = etree.QName(content_parent).localname if content_parent is not None else ""
         if parent is not None and namespace == XHTML_NS and suspicious_ocr_text_tag(elem, local):
             append_text_in_place_of_element(elem, ocr_text_from_fake_tag(elem, local))
             continue
@@ -936,6 +951,9 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
             elem.text = sanitize_css(elem.text)
 
         if namespace == XHTML_NS and local == "link":
+            # Legacy exporters sometimes put stylesheet targets in src instead of href.
+            if not elem.get("href") and elem.get("src"):
+                elem.set("href", elem.attrib.pop("src"))
             rel_tokens = set(elem.get("rel", "").lower().split())
             link_type = elem.get("type", "").strip()
             if "stylesheet" in rel_tokens and link_type:
@@ -1011,6 +1029,10 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
                 append_style(elem, "font-family: %s" % face)
             local = "span"
 
+        if namespace == XHTML_NS and local == "image":
+            elem.tag = f"{{{XHTML_NS}}}img"
+            local = "img"
+
         if namespace == XHTML_NS and local == "strike":
             elem.tag = f"{{{XHTML_NS}}}s"
             local = "s"
@@ -1022,7 +1044,7 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
                 append_style(elem, "height: %s" % css_size)
                 append_style(elem, "border: none")
                 append_style(elem, "background-color: black")
-            if parent_local in PHRASING_PARENT_ELEMENTS:
+            if content_parent_local in PHRASING_PARENT_ELEMENTS:
                 elem.tag = f"{{{XHTML_NS}}}span"
                 append_style(elem, "display: block")
                 append_style(elem, "border-top: 1px solid black")
@@ -1050,13 +1072,13 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
                 "th": {"tr"},
             }
             if parent_local not in valid_parent.get(local, set()):
-                elem.tag = f"{{{XHTML_NS}}}{'span' if parent_local in PHRASING_PARENT_ELEMENTS else 'div'}"
+                elem.tag = f"{{{XHTML_NS}}}{'span' if content_parent_local in PHRASING_PARENT_ELEMENTS else 'div'}"
                 local = etree.QName(elem).localname
 
         if parent is not None and namespace == XHTML_NS and local in BLOCK_TO_INLINE_ELEMENTS:
-            if parent_local == "p":
-                parent.tag = f"{{{XHTML_NS}}}div"
-            elif parent_local in PHRASING_PARENT_ELEMENTS or parent_local == "pre":
+            if content_parent_local == "p":
+                content_parent.tag = f"{{{XHTML_NS}}}div"
+            elif content_parent_local in PHRASING_PARENT_ELEMENTS or content_parent_local == "pre":
                 elem.tag = f"{{{XHTML_NS}}}span"
                 local = "span"
             elif local == "li" and parent_local not in LIST_CONTAINER_ELEMENTS:
@@ -1091,7 +1113,11 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
         for attr in list(elem.attrib):
             attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
             attr_lower = attr_local.lower()
-            if attr_lower.startswith("data-amznremoved"):
+            if namespace == XHTML_NS and (
+                attr_lower == local or (not elem.attrib[attr].strip() and attr_lower in HTML_TAG_NAME_ATTR_RESIDUES)
+            ):
+                del elem.attrib[attr]
+            elif attr_lower.startswith("data-amznremoved"):
                 del elem.attrib[attr]
             elif namespace == XHTML_NS and attr_lower.startswith("v-"):
                 del elem.attrib[attr]
@@ -1131,6 +1157,13 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
                 del elem.attrib[attr]
             elif attr_lower == "target":
                 del elem.attrib[attr]
+            elif namespace == XHTML_NS and attr_lower == "role":
+                # EPUB semantics stay in epub:type; EPUBCheck deprecates ARIA doc-* roles.
+                roles = [role for role in elem.attrib[attr].split() if not role.lower().startswith("doc-")]
+                if roles:
+                    elem.attrib[attr] = " ".join(roles)
+                else:
+                    del elem.attrib[attr]
             elif attr_lower == "style":
                 style = sanitize_style_value(elem.attrib[attr])
                 if style:
@@ -1197,6 +1230,12 @@ SOURCE_AD_INLINE_PATTERNS = [
 
 def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
     def is_known_source_ad_text(text: str) -> bool:
+        compact = re.sub(r'[\s“”「」\"]+', '', text)
+        if re.fullmatch(
+            r"本[書书]由epubw\.com整理[,，]epubw\.com提供最新最全的[優优][質质][電电]子[書书]下[載载][!！]+",
+            compact, re.IGNORECASE,
+        ):
+            return True
         if len(text) <= 500:
             has_qinkan_pitch = "更多精彩" in text or "更多好書" in text or "更多好书" in text
             if has_qinkan_pitch and any(pattern.search(text) for pattern in SOURCE_AD_PATTERNS):
@@ -1248,6 +1287,56 @@ def remove_known_inline_source_ads(root: etree._Element) -> None:
         elem.tail = clean(elem.tail)
 
 
+ORPHAN_ESCAPED_TAG_FRAGMENT_PATTERNS = [
+    re.compile(
+        r'(?<![\w\u3400-\u9fff])(?:[A-Za-z]{0,8})?=?"?[A-Za-z_]*(?:ParaDest|Dest|est|st|t)-\d+"?\s+class="[^"]*"\s+aid="[^"]+"\s*>'
+    ),
+    re.compile(
+        r'(?<![\u3400-\u9fff])(?:[A-Za-z]{0,8})?=?"?(?:footnote|note|ote)-\d+(?:-[A-Za-z]+)?"?\s+class="_idFootnote"\s+role="doc-footnote"\s+epub:type="footnote"\s+aid="[^"]+"\s*>'
+    ),
+    re.compile(r'(?<![\w\u3400-\u9fff])(?:div|iv|v)\s+aid="[A-Za-z0-9_-]+"\s*>'),
+    re.compile(r'(?<![\w\u3400-\u9fff])(?:i)?d="[A-Za-z0-9_-]+"\s*>'),
+]
+
+
+def remove_orphan_escaped_tag_fragments(root: etree._Element) -> None:
+    """Remove Calibre/AZW3 conversion leftovers that became visible text."""
+
+    changed_empty_elements: list[etree._Element] = []
+
+    def clean(value: Optional[str], owner: etree._Element | None = None) -> Optional[str]:
+        if not value:
+            return value
+        cleaned = value
+        for pattern in ORPHAN_ESCAPED_TAG_FRAGMENT_PATTERNS:
+            cleaned = pattern.sub("", cleaned)
+        if owner is not None and cleaned != value and not cleaned.strip():
+            changed_empty_elements.append(owner)
+        return cleaned
+
+    for elem in root.iter():
+        elem.text = clean(elem.text, elem)
+        elem.tail = clean(elem.tail)
+
+    for elem in changed_empty_elements:
+        parent = elem.getparent()
+        if parent is None or len(elem) or "".join(elem.itertext()).strip():
+            continue
+        if not isinstance(elem.tag, str):
+            continue
+        local = etree.QName(elem).localname
+        if local not in {"p", "div", "span"}:
+            continue
+        tail = elem.tail
+        previous = elem.getprevious()
+        if tail:
+            if previous is not None:
+                previous.tail = (previous.tail or "") + tail
+            else:
+                parent.text = (parent.text or "") + tail
+        parent.remove(elem)
+
+
 def normalize_empty_definition_list_toc(root: etree._Element) -> None:
     ns = {"x": XHTML_NS}
     for dl in list(root.xpath(".//x:dl", namespaces=ns)):
@@ -1293,6 +1382,7 @@ def collect_doc_features(root: etree._Element, book_href: str) -> Tuple[str, Lis
 
     normalize_epubcheck_xhtml(root, book_href)
     remove_known_inline_source_ads(root)
+    remove_orphan_escaped_tag_fragments(root)
     remove_known_source_ad_paragraphs(root)
     normalize_empty_definition_list_toc(root)
 
@@ -1610,6 +1700,8 @@ def sanitize_css(data: str) -> str:
 def sanitize_all_css_files(root_dir: Path) -> None:
     for path in root_dir.rglob("*.css"):
         if path.is_file():
+            if is_pdf_file(path):
+                continue
             write_text_file(path, sanitize_css(read_text_file(path)))
 
 
@@ -1809,11 +1901,21 @@ def repair_missing_xhtml_references(root_dir: Path) -> None:
                         if parent is not None:
                             parent.remove(elem)
                             changed = True
-            if qname.namespace == XHTML_NS and local == "a" and elem.get("href"):
-                base, frag = split_href(elem.get("href", ""))
+            anchor_href_attr = next(
+                (
+                    attr
+                    for attr in elem.attrib
+                    if attr == "href" or (attr.startswith("{") and etree.QName(attr).localname == "href")
+                ),
+                None,
+            ) if local == "a" else None
+            if anchor_href_attr:
+                base, frag = split_href(elem.get(anchor_href_attr, ""))
+                html_anchor = qname.namespace == XHTML_NS
                 if resource_kind(base) == "image":
-                    del elem.attrib["href"]
-                    elem.tag = f"{{{XHTML_NS}}}span"
+                    del elem.attrib[anchor_href_attr]
+                    if html_anchor:
+                        elem.tag = f"{{{XHTML_NS}}}span"
                     changed = True
                     continue
                 if not base and frag:
@@ -1828,29 +1930,32 @@ def repair_missing_xhtml_references(root_dir: Path) -> None:
                         for parent in elem.iterancestors()
                     )
                     if in_landmarks:
-                        del elem.attrib["href"]
-                        elem.tag = f"{{{XHTML_NS}}}span"
+                        del elem.attrib[anchor_href_attr]
+                        if html_anchor:
+                            elem.tag = f"{{{XHTML_NS}}}span"
                         changed = True
                         continue
                     anchor = frag[1:]
                     if anchor and anchor not in ids_for(doc_rel):
-                        del elem.attrib["href"]
-                        elem.tag = f"{{{XHTML_NS}}}span"
+                        del elem.attrib[anchor_href_attr]
+                        if html_anchor:
+                            elem.tag = f"{{{XHTML_NS}}}span"
                         changed = True
                         continue
-                _target, _frag, actual = target_for(elem.get("href", ""), doc_rel)
+                _target, _frag, actual = target_for(elem.get(anchor_href_attr, ""), doc_rel)
                 if actual is None and base:
-                    repl = replacement_href(elem.get("href", ""), doc_rel)
+                    repl = replacement_href(elem.get(anchor_href_attr, ""), doc_rel)
                     if repl:
-                        elem.set("href", repl)
+                        elem.set(anchor_href_attr, repl)
                     else:
-                        del elem.attrib["href"]
-                        elem.tag = f"{{{XHTML_NS}}}span"
+                        del elem.attrib[anchor_href_attr]
+                        if html_anchor:
+                            elem.tag = f"{{{XHTML_NS}}}span"
                     changed = True
                 elif actual is not None and frag:
                     anchor = frag[1:]
                     if anchor and anchor not in ids_for(actual):
-                        elem.set("href", encode_local_href(posixpath.relpath(actual, start=posixpath.dirname(doc_rel) or ".")))
+                        elem.set(anchor_href_attr, encode_local_href(posixpath.relpath(actual, start=posixpath.dirname(doc_rel) or ".")))
                         changed = True
         if changed:
             write_text_file(
@@ -1917,6 +2022,8 @@ def repair_missing_css_references(root_dir: Path) -> None:
     for path in root_dir.rglob("*"):
         if not path.is_file() or path.suffix.lower() != ".css":
             continue
+        if is_pdf_file(path):
+            continue
         current_rel = path.relative_to(root_dir).as_posix()
         data = read_text_file(path)
         updated = re.sub(
@@ -1954,6 +2061,44 @@ def convert_bmp_images(root_dir: Path) -> None:
             path.unlink()
         except Exception:
             continue
+    if not replacements:
+        return
+    text_suffixes = {".css", ".html", ".htm", ".ncx", ".opf", ".xhtml", ".xml"}
+    for path in root_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in text_suffixes:
+            continue
+        data = read_text_file(path)
+        updated = data
+        for old, new in replacements.items():
+            updated = updated.replace(old, new)
+        if updated != data:
+            write_text_file(path, updated)
+
+
+def normalize_raster_image_extensions(root_dir: Path) -> None:
+    """Rename raster images whose filename suffix conflicts with their bytes."""
+    suffixes = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "webp": ".webp", "tiff": ".tiff"}
+    replacements: Dict[str, str] = {}
+    for path in sorted(root_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        suffix = path.suffix.lower()
+        kind = sniff_image_kind(path)
+        target_suffix = suffixes.get(kind or "")
+        if not target_suffix or suffix == target_suffix or (kind == "jpeg" and suffix == ".jpeg"):
+            continue
+        target = path.with_suffix(target_suffix)
+        if target.exists() and target.read_bytes() != path.read_bytes():
+            continue
+        old_rel = path.relative_to(root_dir).as_posix()
+        new_rel = target.relative_to(root_dir).as_posix()
+        if not target.exists():
+            path.rename(target)
+        else:
+            path.unlink()
+        replacements[old_rel] = new_rel
+        replacements[quote(old_rel, safe="/%:@!$&'()*+,;=-._~")] = quote(new_rel, safe="/%:@!$&'()*+,;=-._~")
+        replacements[posixpath.basename(old_rel)] = posixpath.basename(new_rel)
     if not replacements:
         return
     text_suffixes = {".css", ".html", ".htm", ".ncx", ".opf", ".xhtml", ".xml"}
@@ -2504,6 +2649,8 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
 
 
 def media_type_for_path(path: Path) -> str:
+    if is_pdf_file(path):
+        return "application/pdf"
     kind = sniff_image_kind(path)
     if kind:
         return {
@@ -2558,9 +2705,17 @@ def sniff_image_kind(path: Path) -> Optional[str]:
     return None
 
 
+def is_pdf_file(path: Path) -> bool:
+    try:
+        with path.open("rb") as stream:
+            return stream.read(5) == b"%PDF-"
+    except OSError:
+        return False
+
+
 def manifest_media_type_for_path(path: Path, href: str) -> str:
     detected = media_type_for_path(path)
-    if detected.startswith("image/"):
+    if detected.startswith("image/") or detected == "application/pdf":
         return detected
     return extension_media_type(href) or detected
 
@@ -3132,6 +3287,20 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                     itemref.attrib.pop("linear", None)
                     changed = True
 
+    cover_items = [item for item in manifest_items() if "cover-image" in item.get("properties", "").split()]
+    declared_covers = [item for item in cover_items if item.get("id") in cover_meta_ids and item.get("media-type", "").startswith("image/")]
+    # Only resolve duplicate cover flags when existing metadata identifies one image.
+    if len(cover_items) > 1 and len(declared_covers) == 1:
+        for item in cover_items:
+            if item is declared_covers[0]:
+                continue
+            tokens = [token for token in item.get("properties", "").split() if token != "cover-image"]
+            if tokens:
+                item.set("properties", " ".join(tokens))
+            else:
+                item.attrib.pop("properties", None)
+            changed = True
+
     if metadata is None:
         metadata = etree.Element(f"{{{OPF_NS}}}metadata", nsmap={"dc": DC_NS})
         root.insert(0, metadata)
@@ -3381,6 +3550,8 @@ def add_missing_manifest_items(root_dir: Path, opf_href: str) -> None:
     import_re = re.compile(r"""@import\s+(?:url\(\s*)?(['"])(.*?)\1""")
     for path in root_dir.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in text_suffixes:
+            continue
+        if is_pdf_file(path):
             continue
         doc_rel = path.relative_to(root_dir).as_posix()
         doc_dir = posixpath.dirname(doc_rel) or "."
@@ -3638,6 +3809,14 @@ def sniff_manifest_media_types(book: EpubBookAdapter, manifest_items: List[Tuple
     }
     overrides: Dict[str, str] = {}
     for mid, _href, media_type in manifest_items:
+        try:
+            path = book.resolve_bookpath(book.id_to_bookpath(mid))
+            if is_pdf_file(path):
+                if media_type != "application/pdf":
+                    overrides[mid] = "application/pdf"
+                continue
+        except Exception:
+            pass
         ext_media_type = extension_media_type(_href)
         if ext_media_type and ext_media_type != media_type:
             overrides[mid] = ext_media_type
@@ -3687,6 +3866,7 @@ def convert_epub2_to_epub3(input_path: Path, output_path: Optional[Path] = None,
 
         opf_text = book.readotherfile(opf_href)
         manifest_items = list(book.manifest_iter())
+        media_type_overrides = sniff_manifest_media_types(book, manifest_items)
         spine_hrefs = [href for _, _, href in book.spine_iter() if href]
 
         spine_properties: Dict[str, str] = {}
@@ -3709,12 +3889,13 @@ def convert_epub2_to_epub3(input_path: Path, output_path: Optional[Path] = None,
             write_text_file(xhtml_path, data)
 
         for _mid, href, media_type in manifest_items:
-            if media_type == "text/css":
+            if media_type_overrides.get(_mid, media_type) == "text/css":
                 css_path = book.resolve_bookpath(book.id_to_bookpath(_mid))
                 if css_path.exists():
                     write_text_file(css_path, sanitize_css(read_text_file(css_path)))
 
         convert_bmp_images(book.root_dir)
+        normalize_raster_image_extensions(book.root_dir)
         fix_case_mismatched_local_hrefs(book.root_dir)
         opf_text = sanitize_namespace_declarations(book.readotherfile(opf_href))
 
@@ -3738,7 +3919,6 @@ def convert_epub2_to_epub3(input_path: Path, output_path: Optional[Path] = None,
             write_ncx_file(ncx_path, ncx_href, doctitle, toc_nodes, uid="")
 
         man_ids = [mid for mid, _, _ in manifest_items if mid]
-        media_type_overrides = sniff_manifest_media_types(book, manifest_items)
         opfconv = Opf_Converter(opf_text, spine_properties, manifest_properties, {}, man_ids, media_type_overrides)
         lang = opfconv.get_lang()
         uid = opfconv.get_uid()

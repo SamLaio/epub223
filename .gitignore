@@ -78,8 +78,13 @@ build
 
 
 AGENTS.md
+release-notes/
 testFile
 .history/
 
-tests
+tests/*
+!tests/test_kindle.py
 conversation-summary.md
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

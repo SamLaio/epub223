@@ -28,6 +28,7 @@ from epub3itizer.conversion import (  # noqa: E402
     flatten_pathological_single_chain_nav,
     normalize_all_xhtml_files,
     normalize_epubcheck_xhtml,
+    normalize_raster_image_extensions,
     normalize_ncx_play_order,
     parse_ncx_file,
     parse_xml_recovering,
@@ -47,6 +48,31 @@ from epub3itizer.cli import parse_args  # noqa: E402
 from epub3itizer.repair import repair_epub  # noqa: E402
 
 
+@pytest.mark.parametrize("declared", ["second", "", "first,second"])
+def test_duplicate_cover_flags_require_unambiguous_metadata(tmp_path, declared):
+    from PIL import Image
+    (tmp_path / "chapter.xhtml").write_text('<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Text</p></body></html>', encoding="utf-8")
+    for name in ("first", "second"):
+        Image.new("RGB", (2, 2), "red").save(tmp_path / (name + ".jpg"))
+    image_before = (tmp_path / "first.jpg").read_bytes()
+    cover_meta = "".join(f'<meta name="cover" content="{name}"/>' for name in declared.split(",") if name)
+    opf = tmp_path / "content.opf"
+    opf.write_text(f'''<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Sample</dc:title><dc:language>en</dc:language><dc:identifier id="uid">urn:uuid:1</dc:identifier>{cover_meta}</metadata>
+<manifest><item id="first" href="first.jpg" media-type="image/jpeg" properties="cover-image svg"/><item id="second" href="second.jpg" media-type="image/jpeg" properties="cover-image"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="chapter"/></spine></package>''', encoding="utf-8")
+    cleanup_opf_manifest(tmp_path, "content.opf")
+    root = etree.parse(str(opf))
+    covers = root.xpath('//*[local-name()="item" and contains(@properties,"cover-image")]/@id')
+    assert covers == (["second"] if declared == "second" else ["first", "second"])
+    assert "svg" in root.xpath('//*[local-name()="item" and @id="first"]')[0].get("properties", "")
+    assert (tmp_path / "first.jpg").read_bytes() == image_before
+    assert (tmp_path / "second.jpg").read_bytes() == image_before
+    first_pass = opf.read_bytes()
+    cleanup_opf_manifest(tmp_path, "content.opf")
+    assert opf.read_bytes() == first_pass
+
+
 def test_stylesheet_link_with_path_in_type_is_normalized_to_css_mime_type():
     root = parse_xml_recovering(
         '''<html xmlns="http://www.w3.org/1999/xhtml"><head>
@@ -58,6 +84,17 @@ def test_stylesheet_link_with_path_in_type_is_normalized_to_css_mime_type():
 
     link = root.xpath(".//*[local-name()='link']")[0]
     assert link.get("type") == "text/css"
+
+
+def test_xhtml_image_element_is_renamed_to_img():
+    root = parse_xml_recovering(
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body><image src="cover.jpg"/></body></html>'
+    )
+
+    normalize_epubcheck_xhtml(root)
+
+    assert root.xpath(".//*[local-name()='img']")
+    assert not root.xpath(".//*[local-name()='image']")
 
 
 def test_opf_metadata_attrs_are_epub3_safe():
@@ -83,6 +120,19 @@ def test_opf_metadata_attrs_are_epub3_safe():
     assert 'property="file-as">Author, A</meta>' in opf3
     assert '<dc:identifier id="uid">urn:isbn:123</dc:identifier>' in opf3
     etree.fromstring(opf3.encode("utf-8"))
+
+
+def test_opf_comment_without_space_does_not_capture_manifest_or_spine():
+    opf2 = """<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Sample</dc:title><dc:language>zh-Hant</dc:language><dc:identifier id="uid">123</dc:identifier><!--accessibility options--></metadata>
+<manifest><item id="chap" href="chap.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="chap"/></spine></package>"""
+
+    root = etree.fromstring(Opf_Converter(opf2, {}, {}, {}, ["chap"]).get_opf3().encode("utf-8"))
+
+    assert len(root.xpath("./*[local-name()='metadata']/*[local-name()='manifest' or local-name()='spine']")) == 0
+    assert len(root.xpath("./*[local-name()='manifest']")) == 1
+    assert len(root.xpath("./*[local-name()='spine']/*[local-name()='itemref']")) == 2
 
 
 def test_opf_package_prefix_includes_calibre_when_needed():
@@ -377,6 +427,18 @@ def test_known_source_ad_paragraph_is_removed():
     assert "請看小說網" not in output
     assert "這一段是正文" in output
     assert "下一段正文" in output
+
+
+def test_epubw_full_ad_removed_without_touching_quoted_narrative():
+    root = etree.fromstring('''<html xmlns="http://www.w3.org/1999/xhtml"><head><title>測試</title></head><body>
+<div><p>正文保留。</p><p>本书由“<a href="https://epubw.com">ePUBw.COM</a>”整理，ePUBw.COM 提供最新最全的优质电子书下载！！！</p>後接正文。</div>
+<p>本書由「ePUBw.COM」整理，ePUBw.COM 提供最新最全的優質電子書下載！！！</p>
+<p>他讀到本書由 ePUBw.COM 整理的字樣。</p>
+</body></html>'''.encode())
+    output, _, _, _ = collect_doc_features(root, "chapter.xhtml")
+    assert "提供最新最全" not in output
+    assert "正文保留。" in output and "後接正文。" in output
+    assert "他讀到本書由 ePUBw.COM 整理的字樣。" in output
 
 
 def test_yanqingtu_source_ad_paragraphs_are_removed():
@@ -773,6 +835,7 @@ def test_forms_bad_a_attribute_unknown_tag_and_hr_in_heading_are_repaired():
 <span><tt>mono</tt><tr><td><p>menu</p></td></tr></span>
 <p><order of="" the="" zenith="">OZ</order><do>bad</do><mi><so>note</so></mi><a___>a</a___><b___>b</b___></p>
 <p><span times="" new="" roman="" serif="" tooltip="Tip" colspan="2">bad attrs</span></p>
+<div div="" i="" class="calibre2">same-name attr</div>
 <pre v-pre="" data-lang="json"><code>{}</code></pre>
 <p><a href="asset.bin" download="">download</a></p>
 <p><a a="" href="chap.xhtml">note</a></p>
@@ -801,6 +864,9 @@ def test_forms_bad_a_attribute_unknown_tag_and_hr_in_heading_are_repaired():
     assert 'zenith=""' not in output
     assert 'times=""' not in output
     assert 'tooltip=' not in output
+    assert 'div=""' not in output
+    assert 'i=""' not in output
+    assert '<div class="calibre2">same-name attr</div>' in output
     assert 'colspan="2">bad attrs' not in output
     assert "v-pre" not in output
     assert "download=" not in output
@@ -1382,6 +1448,25 @@ def test_final_xhtml_normalization_preserves_nav_epub_type(tmp_path):
     assert 'epub:type="toc"' in page.read_text(encoding="utf-8")
 
 
+def test_xhtml_normalization_removes_deprecated_doc_roles_but_keeps_epub_type():
+    root = etree.fromstring(
+        b'''<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Title</title></head><body>
+<div epub:type="footnotes" role="doc-endnotes"><div epub:type="footnote" role="doc-endnote">Note <a role="doc-backlink" href="#ref">back</a></div></div>
+<aside role="note doc-endnote">Retain the non-document role.</aside>
+</body></html>'''
+    )
+
+    output, _, _, _ = collect_doc_features(root, "Text/notes.xhtml")
+
+    assert 'epub:type="footnotes"' in output
+    assert 'epub:type="footnote"' in output
+    assert "doc-endnote" not in output
+    assert "doc-endnotes" not in output
+    assert "doc-backlink" not in output
+    assert 'role="note"' in output
+
+
 def test_invalid_xhtml_attrs_are_removed_or_moved_to_style():
     root = etree.fromstring(
         b"""<html xmlns="http://www.w3.org/1999/xhtml">
@@ -1399,6 +1484,19 @@ def test_invalid_xhtml_attrs_are_removed_or_moved_to_style():
     assert 'width="100%"' not in output
     assert 'style="width: 100%"' in output
     assert 'height="20"' in output
+
+
+def test_stylesheet_link_src_is_moved_to_href():
+    root = etree.fromstring(
+        b'''<html xmlns="http://www.w3.org/1999/xhtml"><head>
+        <title>Title</title><link rel="stylesheet" type="text/css" src="../styles/book.css"/>
+        </head><body><p>Text</p></body></html>'''
+    )
+
+    output, _, _, _ = collect_doc_features(root, "Text/chapter01.xhtml")
+
+    assert 'href="../styles/book.css"' in output
+    assert '<link src=' not in output
 
 
 def test_hr_legacy_size_and_align_become_css():
@@ -1822,6 +1920,25 @@ def test_block_list_inside_paragraph_turns_parent_into_div():
     assert "<div><span>Outline</span><ul>" in output
 
 
+def test_transparent_links_preserve_blocks_and_respect_surrounding_context():
+    root = etree.fromstring(b'''<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Title</title></head><body>
+<div><a href="chapter.xhtml"><p id="heading">Title</p><p class="summary">Summary</p><hr/></a></div>
+<div><ins><del><p id="change">Change</p></del></ins></div>
+<p id="outer"><a href="chapter.xhtml"><p id="inner">Nested</p></a></p>
+<span><a href="chapter.xhtml"><div id="inline">Inline</div></a></span>
+</body></html>''')
+    output, _, _, _ = collect_doc_features(root, "Text/toc.xhtml")
+    parsed = etree.fromstring(output.encode())
+    ns = {"h": "http://www.w3.org/1999/xhtml"}
+    assert parsed.xpath('count(//h:div/h:a/h:p)', namespaces=ns) == 3
+    assert parsed.xpath('//h:a/h:hr', namespaces=ns)
+    assert parsed.xpath('//h:ins/h:del/h:p[@id="change"]', namespaces=ns)
+    assert parsed.xpath('//h:div[@id="outer"]/h:a/h:p[@id="inner"]', namespaces=ns)
+    assert parsed.xpath('//h:span/h:a/h:span[@id="inline"]', namespaces=ns)
+    assert parsed.xpath('//h:p[@class="summary"]/text()', namespaces=ns) == ["Summary"]
+
+
 def test_case_mismatched_local_hrefs_are_rewritten(tmp_path):
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
     (tmp_path / "OEBPS" / "style").mkdir(parents=True)
@@ -1923,6 +2040,25 @@ def test_missing_svg_cover_reference_uses_actual_cover_file(tmp_path):
     repair_missing_xhtml_references(tmp_path)
 
     assert 'href="../../cover.jpeg"' in page.read_text(encoding="utf-8")
+
+
+def test_missing_svg_anchor_reference_uses_actual_xhtml_file(tmp_path):
+    (tmp_path / "item" / "xhtml").mkdir(parents=True)
+    page = tmp_path / "item" / "xhtml" / "p-004.xhtml"
+    page.write_text(
+        """<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<a xlink:href="xhtml/p-005.xhtml"><rect/></a>
+</svg></body></html>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "item" / "xhtml" / "p-005.xhtml").write_text(
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body/></html>', encoding="utf-8"
+    )
+
+    repair_missing_xhtml_references(tmp_path)
+
+    assert 'href="p-005.xhtml"' in page.read_text(encoding="utf-8")
 
 
 def test_missing_stylesheet_reference_uses_actual_css_location(tmp_path):
@@ -2037,6 +2173,23 @@ def test_bmp_content_with_wrong_extension_is_converted(tmp_path):
     assert not image.exists()
     assert (tmp_path / "OPS" / "images" / "wrong.png").exists()
     assert 'src="images/wrong.png"' in page.read_text(encoding="utf-8")
+
+
+def test_mislabeled_jpeg_is_renamed_and_referenced(tmp_path):
+    (tmp_path / "OEBPS" / "Images").mkdir(parents=True)
+    image = tmp_path / "OEBPS" / "Images" / "002.png"
+    image.write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 32)
+    page = tmp_path / "OEBPS" / "chapter.xhtml"
+    page.write_text('<img src="Images/002.png" alt=""/>', encoding="utf-8")
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text('<item href="Images/002.png" media-type="image/png"/>', encoding="utf-8")
+
+    normalize_raster_image_extensions(tmp_path)
+
+    assert not image.exists()
+    assert (tmp_path / "OEBPS" / "Images" / "002.jpg").exists()
+    assert 'Images/002.jpg' in page.read_text(encoding="utf-8")
+    assert 'Images/002.jpg' in opf.read_text(encoding="utf-8")
 
 
 def test_ncx_is_rebuilt_with_valid_navmap(tmp_path):
@@ -2533,6 +2686,28 @@ def test_cleanup_opf_uses_sniffed_image_media_type(tmp_path):
     cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
 
     assert 'media-type="image/png"' in opf.read_text(encoding="utf-8")
+
+
+def test_binary_pdf_misnamed_as_css_is_not_decoded(tmp_path):
+    (tmp_path / "OEBPS").mkdir()
+    fake_pdf = tmp_path / "OEBPS" / "residue.css"
+    original = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n"
+    fake_pdf.write_bytes(original)
+    opf = tmp_path / "OEBPS" / "content.opf"
+    opf.write_text(
+        '''<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>測試</dc:title><dc:language>zh-Hant</dc:language></metadata>
+<manifest><item id="residue" href="residue.css" media-type="text/css"/></manifest><spine/>
+</package>''',
+        encoding="utf-8",
+    )
+
+    add_missing_manifest_items(tmp_path, "OEBPS/content.opf")
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+    sanitize_all_css_files(tmp_path)
+
+    assert fake_pdf.read_bytes() == original
+    assert 'media-type="application/pdf"' in opf.read_text(encoding="utf-8")
 
 
 def test_ncx_parser_ignores_comments_and_processing_instructions(tmp_path):
@@ -3216,6 +3391,37 @@ def test_private_kmoetag_xhtml_attribute_is_removed():
     assert "kimageraw" not in data
     assert "kmoe-marker" not in data
     assert 'class="keep"' in data
+
+
+def test_orphan_escaped_tag_fragments_are_removed_from_xhtml_text():
+    root = parse_xml_recovering(
+        '''<html xmlns="http://www.w3.org/1999/xhtml"
+        xmlns:epub="http://www.idpf.org/2007/ops"><body>
+        <div id="D1" class="calibre2">id="_idParaDest-3" class="ff_serif" aid="D2"&gt;<span>第四章</span></div>
+        <div id="D2" class="calibre2">aDest-13" class="ff_serif" aid="D3"&gt;<span>第十三章</span></div>
+        <p>d="footnote-133" class="_idFootnote" role="doc-footnote" epub:type="footnote" aid="167"&gt;</p>
+        <p>ote-707" class="_idFootnote" role="doc-footnote" epub:type="footnote" aid="51B"&gt;</p>
+        <p>[577note-605" class="_idFootnote" role="doc-footnote" epub:type="footnote" aid="4I7"&gt;</p>
+        <p id="_idParaDest-19" aid="7J2">誌謝</p>
+        <p>一加一 &gt; 一。</p>
+        </body></html>'''
+    )
+
+    normalize_epubcheck_xhtml(root)
+    from epub3itizer.conversion import remove_orphan_escaped_tag_fragments
+
+    remove_orphan_escaped_tag_fragments(root)
+
+    data = etree.tostring(root, encoding="unicode")
+    assert 'id="_idParaDest-3" class=' not in data
+    assert "_idFootnote" not in data
+    assert "aid=" not in data
+    assert 'id="_idParaDest-19"' in data
+    assert "<span>第四章</span>" in data
+    assert "<span>第十三章</span>" in data
+    assert "[577</p>" in data
+    assert ">誌謝</p>" in data
+    assert "一加一 &gt; 一" in data
 
 
 def test_cleanup_opf_removes_empty_dc_metadata_and_invalid_raster_images(tmp_path):

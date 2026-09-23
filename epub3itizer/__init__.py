@@ -1,4 +1,4 @@
-__version__ = "1.2"
+__version__ = "1.3"
 
 from .conversion import convert_epub2_to_epub3
 from .repair import repair_epub
