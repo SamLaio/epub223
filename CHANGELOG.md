@@ -1,5 +1,12 @@
 # Change Log
 
+## 1.4 - 2026-09-25
+
+- 新增 `python -m epub3itizer.kindle --keep-vertical` 選用模式，為含
+  `spine page-progression-direction="rtl"` 的 EPUB3 產生 Send-to-Kindle 直排測試副本。
+  此模式只移除 RTL 宣告；保留直排 CSS、固定頁／跨頁屬性、SVG、viewport、圖片與正文，
+  不覆寫原書或納入一般修復。加入 ZIP、文字、圖片、直排、固定頁、跨頁與 SVG 的回歸測試。
+
 ## 2026-09-07
 
 - 沿用既有來源廣告清理，新增 ePUBw 完整下載宣傳句的繁簡比對，保留周圍正文及一般網站名引用；加入跨行內標籤、繁簡與段落尾文回歸測試。

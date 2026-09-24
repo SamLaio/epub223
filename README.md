@@ -1,4 +1,4 @@
-# ePub223 1.2
+# ePub223 1.4
 
 格式修復會辨識內容以 `%PDF-` 開頭、但誤標成 CSS 的二進位資源，修正 OPF media type 並避免將其當成文字樣式表改寫。
 
@@ -39,6 +39,17 @@ python -m epub3itizer.kindle "原書.epub" "Kindle橫排.epub" --language zh-Han
 KDP 與 Send-to-Kindle 並非同一服務，這些是相容性參考，不是雲端驗收保證。
 先檢視 calibre EPUB 匯入與封面處理的參考思路，未移植其程式碼；此模式屬選用排版轉換，
 不是將合法的直排或混合版面一律當成 EPUB 格式錯誤。
+
+### Kindle 直排相容副本（選用）
+
+```powershell
+python -m epub3itizer.kindle "原書.epub" "Kindle直排.epub" --keep-vertical --language zh-Hant
+```
+
+這是針對實測被 Send-to-Kindle 拒絕、且 OPF `spine` 含
+`page-progression-direction="rtl"` 的中文直排 EPUB3。它只移除該 RTL 宣告；
+保留 `vertical-rl`、固定頁／跨頁設定、SVG、viewport、圖片與正文。普通修復不會套用，
+也不覆寫原書，因為這會改變 EPUB 宣告的閱讀方向。輸出仍須通過 EPUBCheck 並實際傳送確認。
 
 ### 一般轉換與修復
 

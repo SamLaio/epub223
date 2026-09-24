@@ -5,7 +5,7 @@ import pytest
 from lxml import etree
 from PIL import Image
 
-from epub3itizer.kindle import horizontal_css, kindle_reflowable, _unwrap_image
+from epub3itizer.kindle import horizontal_css, kindle_reflowable, kindle_vertical_compatible, _unwrap_image
 from epub3itizer.repair import repair_epub
 
 
@@ -30,14 +30,14 @@ def test_complex_or_cropped_svg_is_not_flattened():
 
 
 def test_opt_in_reflowable_copy_preserves_text_and_images(tmp_path):
-    source, normal, output = [tmp_path / name for name in ('source.epub', 'normal.epub', 'kindle.epub')]
+    source, normal, output, vertical = [tmp_path / name for name in ('source.epub', 'normal.epub', 'kindle.epub', 'kindle-vertical.epub')]
     buffer = BytesIO()
     Image.new('RGB', (100, 200)).save(buffer, format='JPEG')
     image_bytes = buffer.getvalue()
     with zipfile.ZipFile(source, 'w') as z:
         z.writestr('mimetype', 'application/epub+zip')
         z.writestr('META-INF/container.xml', '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
-        z.writestr('content.opf', '''<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">test</dc:identifier><dc:title>測試</dc:title><dc:language>zh-Hant</dc:language><meta property="rendition:layout">reflowable</meta></metadata><manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml" properties="svg"/><item id="img" href="image.jpg" media-type="image/jpeg"/></manifest><spine page-progression-direction="rtl"><itemref idref="page" properties="rendition:layout-pre-paginated rendition:spread-none"/></spine></package>''')
+        z.writestr('content.opf', '''<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">test</dc:identifier><dc:title>測試</dc:title><dc:language>zh-Hant</dc:language><meta property="rendition:layout">reflowable</meta></metadata><manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml" properties="svg"/><item id="img" href="image.jpg" media-type="image/jpeg"/></manifest><spine page-progression-direction="rtl"><itemref idref="page" properties="rendition:layout-pre-paginated page-spread-left"/></spine></package>''')
         z.writestr('page.xhtml', '''<html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>測試</title><meta name="viewport" content="width=100,height=200"/><style>.vrtl{writing-mode:vertical-rl}</style></head><body><p id="chapter" style="writing-mode:vertical-rl">保留<em>全部</em>文字。</p><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"><image xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="image.jpg" width="100" height="200"/></svg></body></html>''')
         z.writestr('image.jpg', image_bytes)
     repair_epub(source, normal)
@@ -45,6 +45,19 @@ def test_opt_in_reflowable_copy_preserves_text_and_images(tmp_path):
         assert b'vertical-rl' in z.read('page.xhtml')
         assert b'pre-paginated' in z.read('content.opf')
     before = source.read_bytes()
+    kindle_vertical_compatible(source, vertical, 'zh-Hant')
+    with zipfile.ZipFile(vertical) as z:
+        assert z.testzip() is None
+        assert z.read('image.jpg') == image_bytes
+        assert b'page-progression-direction' not in z.read('content.opf')
+        assert b'pre-paginated' in z.read('content.opf')
+        assert b'page-spread' in z.read('content.opf')
+        assert b'vertical-rl' in z.read('page.xhtml')
+        assert b'<svg' in z.read('page.xhtml')
+        page = etree.fromstring(z.read('page.xhtml'))
+        assert page.get('lang') == 'zh-Hant'
+        assert ''.join(page.xpath('//*[local-name()="p"]')[0].itertext()) == '保留全部文字。'
+    assert source.read_bytes() == before
     kindle_reflowable(source, output, 'zh-Hant')
     with zipfile.ZipFile(output) as z:
         assert z.testzip() is None

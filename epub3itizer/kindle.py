@@ -132,11 +132,47 @@ def kindle_reflowable(input_path: Path, output_path: Path, language: str | None 
     return output_path
 
 
+def kindle_vertical_compatible(input_path: Path, output_path: Path, language: str | None = None) -> Path:
+    """Make a Kindle test copy by removing only the EPUB spine RTL declaration."""
+    input_path, output_path = Path(input_path).resolve(), Path(output_path).resolve()
+    if input_path == output_path or (output_path.exists() and input_path.samefile(output_path)):
+        raise ValueError("Kindle 副本不可覆寫輸入檔")
+    with EpubBookAdapter.open(input_path) as book:
+        opf_href = book.get_opfbookpath()
+        opf_path = book.root_dir / opf_href
+        tree = etree.parse(str(opf_path), XML_PARSER)
+        package = tree.getroot()
+        if not package.get("version", "").startswith("3"):
+            raise ValueError("請先以 epub223 將 EPUB2 轉為 EPUB3")
+        spine = package.find("o:spine", NS)
+        if spine is None:
+            raise ValueError("OPF 缺少 spine，不能製作 Kindle 副本")
+        spine.attrib.pop("page-progression-direction", None)
+        if language:
+            package.set(XML_LANG, language)
+            metadata = package.find("o:metadata", NS)
+            for node in metadata.findall("dc:language", NS):
+                node.text = language
+            for item in tree.xpath("//o:manifest/o:item[@media-type='application/xhtml+xml']", namespaces=NS):
+                path = (opf_path.parent / unquote(item.get("href"))).resolve()
+                path.relative_to(book.root_dir.resolve())
+                doc = etree.parse(str(path), XML_PARSER)
+                doc.getroot().set("lang", language)
+                doc.getroot().set(XML_LANG, language)
+                doc.write(str(path), encoding="utf-8", xml_declaration=True)
+        tree.write(str(opf_path), encoding="utf-8", xml_declaration=True)
+        conv.zip_epub(book.root_dir, output_path)
+    return output_path
+
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="製作橫排流式 Kindle 副本，不改原書")
+    parser = argparse.ArgumentParser(description="製作 Kindle 副本，不改原書")
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--language", help="已確認的內容語言，例如 zh-Hant")
+    parser.add_argument("--keep-vertical", action="store_true",
+                        help="保留直排與固定版面，只移除 spine 的 RTL 宣告")
     args = parser.parse_args()
-    print(kindle_reflowable(args.input, args.output, args.language))
+    converter = kindle_vertical_compatible if args.keep_vertical else kindle_reflowable
+    print(converter(args.input, args.output, args.language))
