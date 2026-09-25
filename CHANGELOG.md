@@ -1,5 +1,9 @@
 # Change Log
 
+## 1.5 - 2026-09-25
+
+- XHTML 正規化會移除舊轉檔器加在圖片上的私有 `active="true"` 屬性，保留圖片資源與其他合法屬性，避免 EPUBCheck `RSC-005`；加入回歸測試。
+
 ## 1.4 - 2026-09-25
 
 - 新增 `python -m epub3itizer.kindle --keep-vertical` 選用模式，為含

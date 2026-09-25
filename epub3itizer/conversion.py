@@ -59,7 +59,7 @@ PRIVATE_CSS_PROPERTIES = {"duokan-text-indent", "text-spacing-trim"}
 LIST_CONTAINER_ELEMENTS = {"menu", "ol", "ul"}
 FOREIGN_IMAGE_SUFFIXES = {".emf", ".wmf"}
 RASTER_IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
-PRIVATE_XHTML_ATTRS = {"aid", "kimageraw", "kmoetag"}
+PRIVATE_XHTML_ATTRS = {"active", "aid", "kimageraw", "kmoetag"}
 PHRASING_PARENT_ELEMENTS = {
     "a",
     "abbr",

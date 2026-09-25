@@ -1,4 +1,4 @@
-# ePub223 1.4
+# ePub223 1.5
 
 格式修復會辨識內容以 `%PDF-` 開頭、但誤標成 CSS 的二進位資源，修正 OPF media type 並避免將其當成文字樣式表改寫。
 
@@ -68,6 +68,7 @@ python -m epub3itizer.kindle "原書.epub" "Kindle直排.epub" --keep-vertical -
 - XHTML 樣式表 `<link>` 若將資源路徑錯寫於 `src`、卻未寫 `href`，會保留路徑並移至標準 `href` 屬性，避免 EPUBCheck 將 `src` 視為非法屬性
 - XHTML 正文的舊式 `<image>` 元素會改為標準 `<img>`，但 SVG 命名空間內的 `<image>` 保留；修復時也會依圖檔檔頭更正錯置的 JPEG／PNG／GIF／WebP／TIFF 副檔名並回寫所有引用
 - XHTML 清理會移除 AZW3/Calibre 轉檔後掉進正文的孤兒標籤殘片，例如 `id="_idParaDest..." class="..." aid="..."&gt;` 或 `d="footnote-..." class="_idFootnote" ...&gt;`，並移除 `aid` 私有屬性；這類問題可能通過 EPUBCheck，但會在閱讀器中顯示成錯誤內文
+- XHTML 清理會移除舊轉檔器加在圖片上的私有 `active="true"` 屬性，保留圖片 `src`、`alt`、`class` 與正文，避免 EPUBCheck `RSC-005`
 - XHTML 清理會移除已棄用的 ARIA `role="doc-*"` 註腳角色，例如 `doc-endnote`、`doc-endnotes`、`doc-backlink`，但保留 EPUB 標準的 `epub:type="footnote"`／`footnotes` 與其他非 `doc-*` ARIA 角色，避免 EPUBCheck `RSC-017` 警告
 - 目錄頁修復會整理空 `<dd/>` 的舊式 `<dl>` 目錄、把官方 nav 檔中只有 `<div><ul>` 的普通目錄補成 EPUB3 需要的 `<nav epub:type="toc">`，並攤平製作器誤產生的單鏈巢狀 nav，讓章節維持可點擊且階層合理
 - 修復 SVG 圖像式目錄內遺失或重複資料夾的 `xlink:href` 章節連結，依實際 XHTML 檔案回寫為正確相對路徑

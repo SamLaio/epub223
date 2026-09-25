@@ -3377,20 +3377,22 @@ def test_cleanup_opf_removes_missing_manifest_fallback_id(tmp_path):
     assert "fallback=" not in data
 
 
-def test_private_kmoetag_xhtml_attribute_is_removed():
+def test_private_xhtml_attributes_are_removed():
     root = parse_xml_recovering(
         '''<html xmlns="http://www.w3.org/1999/xhtml"><body>
-        <p kmoetag="1" kimageraw="true" kmoe-marker="x" class="keep">text</p>
+        <img src="cover.jpg" alt="cover" active="true" kmoetag="1" kimageraw="true" kmoe-marker="x" class="keep" />
         </body></html>'''
     )
 
     normalize_epubcheck_xhtml(root)
 
     data = etree.tostring(root, encoding="unicode")
+    assert "active" not in data
     assert "kmoetag" not in data
     assert "kimageraw" not in data
     assert "kmoe-marker" not in data
     assert 'class="keep"' in data
+    assert 'src="cover.jpg"' in data
 
 
 def test_orphan_escaped_tag_fragments_are_removed_from_xhtml_text():
