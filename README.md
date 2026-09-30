@@ -1,4 +1,4 @@
-# ePub223 1.5
+# ePub223 1.6
 
 格式修復會辨識內容以 `%PDF-` 開頭、但誤標成 CSS 的二進位資源，修正 OPF media type 並避免將其當成文字樣式表改寫。
 
@@ -75,6 +75,7 @@ python -m epub3itizer.kindle "原書.epub" "Kindle直排.epub" --keep-vertical -
 - CSS 清理會移除重複屬性宣告，例如重複的 `font-weight`、`border-top`、`border-bottom`、`border-left`、`border-right`；同名屬性保留最後一次宣告，以符合 CSS cascade 語意並降低 Sigil 檢查書本警告
 - 修復流程會整理官方 `nav.xhtml`，例如把可能造成 `NAV-011` 閱讀順序警告的父層目錄連結降級為純文字；父層若指到晚於子項目的 spine 位置，會保留子章節連結並移除父層 href；同一檔案內 fragment 後的裸連結會被降級並由既有空 leaf 清理移除，保留可判定順序的子章節連結
 - OPF 清理會保留 manifest/spine 使用中的資源 id，並將 metadata 中撞名的 `id` 改成安全名稱，避免 EPUBCheck 回報 `Duplicate "title"` 等 XML id 衝突
+- OPF 清理會移除 0 位元組的 XHTML manifest/spine 項目及其失效目錄連結，避免 EPUBCheck `RSC-016` 的空文件解析錯誤
 - EPUB2 OPF 中緊接文字的 XML 註解（例如 `<!--accessibility options-->`）會正確略過，不會誤把後續 manifest／spine 包入 metadata。
 
 ## 專案結構

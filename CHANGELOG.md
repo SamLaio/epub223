@@ -1,5 +1,9 @@
 # Change Log
 
+## 1.6 - 2026-09-30
+
+- OPF manifest 清理會移除 0 位元組 XHTML、對應 spine 項目與失效 nav 連結，避免 EPUBCheck `RSC-016`；加入回歸測試。
+
 ## 1.5 - 2026-09-25
 
 - XHTML 正規化會移除舊轉檔器加在圖片上的私有 `active="true"` 屬性，保留圖片資源與其他合法屬性，避免 EPUBCheck `RSC-005`；加入回歸測試。

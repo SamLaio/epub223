@@ -778,6 +778,33 @@ def test_repair_missing_xhtml_references_skips_unparseable_empty_xhtml(tmp_path)
     repair_missing_xhtml_references(tmp_path)
 
 
+def test_cleanup_opf_manifest_removes_zero_byte_xhtml_and_nav_link(tmp_path):
+    oebps = tmp_path / "OEBPS"
+    text = oebps / "Text"
+    text.mkdir(parents=True)
+    (text / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+    empty = text / "empty.xhtml"
+    empty.write_bytes(b"")
+    (oebps / "nav.xhtml").write_text(
+        '''<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="Text/chapter.xhtml">Chapter</a></li><li><a href="Text/empty.xhtml">Empty</a></li></ol></nav></body></html>''',
+        encoding="utf-8",
+    )
+    opf = oebps / "content.opf"
+    opf.write_text(
+        '''<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/><item id="empty" href="Text/empty.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/><itemref idref="empty"/></spine></package>''',
+        encoding="utf-8",
+    )
+
+    cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
+    cleanup_nav_leaf_spans(tmp_path, "OEBPS/content.opf")
+
+    output = opf.read_text(encoding="utf-8")
+    assert 'id="empty"' not in output
+    assert 'idref="empty"' not in output
+    assert not empty.exists()
+    assert "empty.xhtml" not in (oebps / "nav.xhtml").read_text(encoding="utf-8")
+
+
 def test_required_manifest_properties_skips_unparseable_empty_xhtml(tmp_path):
     empty = tmp_path / "empty.xhtml"
     empty.write_text("", encoding="utf-8")

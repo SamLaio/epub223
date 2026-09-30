@@ -3121,6 +3121,16 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                     changed = True
                     continue
             media_type = manifest_media_type_for_path(target, href)
+            if media_type == "application/xhtml+xml" and target.stat().st_size == 0:
+                manifest.remove(item)
+                if item_id:
+                    removed_ids.add(item_id)
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+                changed = True
+                continue
             if media_type and item.get("media-type") != media_type:
                 item.set("media-type", media_type)
                 changed = True
