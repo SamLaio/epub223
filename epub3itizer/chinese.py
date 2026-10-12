@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 from typing import Iterable
 
 from lxml import etree
 
 try:
-    from s2tw_converter import Converter as ZhTranslateConverter
+    from s2tw_converter import Converter as ZhTranslateConverter, simplified_pattern
 except Exception:  # pragma: no cover - local integration fallback
     zhtranslate_src = Path(r"D:\github\zhTranslate\src")
     if zhtranslate_src.exists() and str(zhtranslate_src) not in sys.path:
         sys.path.insert(0, str(zhtranslate_src))
     try:
-        from s2tw_converter import Converter as ZhTranslateConverter
+        from s2tw_converter import Converter as ZhTranslateConverter, simplified_pattern
     except Exception:
         ZhTranslateConverter = None
+        simplified_pattern = None
 
 TEXT_SUFFIXES = {".html", ".htm", ".xhtml", ".opf", ".ncx", ".xml"}
 TEXT_ATTRS = {
@@ -61,13 +63,17 @@ def convert_chinese_text(text: str | None, mode: str | None) -> str | None:
     if mode in {None, "", "none"}:
         return text
     if mode == "s2tw":
-        return to_traditional(text)
+        converter = _get_converter()
+        if not converter:
+            raise RuntimeError("簡轉正失敗：無法載入共享 zhTranslate")
+        return converter.convert(text)
     raise ValueError(f"Unsupported Chinese conversion mode: {mode}")
 
 
 def convert_chinese_in_package(root_dir: Path, mode: str | None) -> None:
     if mode in {None, "", "none"}:
         return
+    convert_chinese_text("", mode)  # 明確要求轉換時，缺相依不可靜默略過。
     for path in _iter_text_files(root_dir):
         try:
             original = path.read_text(encoding="utf-8")
@@ -105,20 +111,30 @@ def _convert_element_text(root: etree._Element, mode: str) -> None:
         if not isinstance(elem.tag, str):
             continue
         local = etree.QName(elem).localname.lower()
-        if elem.text and local not in SKIP_TEXT_ELEMENTS and not _has_skip_ancestor(elem):
-            elem.text = convert_chinese_text(elem.text, mode)
+        skip = elem.get('translate', '').lower() == 'no' or local in SKIP_TEXT_ELEMENTS or _has_skip_ancestor(elem)
+        if elem.text and not skip:
+            elem.text = _convert_simplified_field(elem.text, mode)
         if elem.tail and not _parent_is_skip(elem):
-            elem.tail = convert_chinese_text(elem.tail, mode)
+            elem.tail = _convert_simplified_field(elem.tail, mode)
         for attr in list(elem.attrib):
             attr_local = etree.QName(attr).localname.lower() if attr.startswith("{") else attr.lower()
-            if attr_local in TEXT_ATTRS:
-                elem.set(attr, convert_chinese_text(elem.attrib[attr], mode) or "")
+            if attr_local in TEXT_ATTRS and not skip:
+                elem.set(attr, _convert_simplified_field(elem.attrib[attr], mode))
+
+
+def _convert_simplified_field(text: str, mode: str) -> str:
+    # 只選有明確簡體字的可讀欄位；詞彙／標點仍唯一由 zhTranslate 處理。
+    parts = re.split(r'(「[^「」]*[\u3040-\u30ff][^「」]*」|〈[^〈〉]*[\u3040-\u30ff][^〈〉]*〉|《[^《》]*[\u3040-\u30ff][^《》]*》|（[^（）]*[\u3040-\u30ff][^（）]*）|\([^()]*[\u3040-\u30ff][^()]*\))', text)
+    if simplified_pattern is None:
+        raise RuntimeError("簡轉正失敗：缺少共享字形偵測")
+    pattern = simplified_pattern(True)
+    return ''.join(part if i % 2 or not pattern.search(part) else convert_chinese_text(part, mode) for i, part in enumerate(parts))
 
 
 def _has_skip_ancestor(elem: etree._Element) -> bool:
     parent = elem.getparent()
     while parent is not None:
-        if isinstance(parent.tag, str) and etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS:
+        if isinstance(parent.tag, str) and (etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS or parent.get('translate', '').lower() == 'no'):
             return True
         parent = parent.getparent()
     return False
@@ -129,5 +145,5 @@ def _parent_is_skip(elem: etree._Element) -> bool:
     return bool(
         parent is not None
         and isinstance(parent.tag, str)
-        and etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS
+        and (etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS or parent.get('translate', '').lower() == 'no' or _has_skip_ancestor(parent))
     )

@@ -7,6 +7,20 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
+
+@pytest.mark.parametrize("advert", ["下载器购买请联系作者QQxxxxxx或者微信xxxxxxx", "下載器購買請聯絡作者QQxxxxxx或者微信xxxxxxx"])
+def test_downloader_placeholder_ad_is_removed_only_from_head(advert):
+    from epub3itizer.conversion import normalize_head_meta_children
+    root = etree.fromstring(f'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{advert}</title><meta name="author" content="{advert}"/><meta name="generator" content="pdftohtml 0.36"/><meta name="author" content="楊若暉"/></head><body><p>{advert}</p><img src="page.png"/></body></html>'.encode())
+    body = etree.tostring(root.find('{http://www.w3.org/1999/xhtml}body'))
+    normalize_head_meta_children(root)
+    assert root.xpath('string(//*[local-name()="title"])') == '正文'
+    assert root.xpath('//*[local-name()="meta"]/@content') == ['pdftohtml 0.36', '楊若暉']
+    assert etree.tostring(root.find('{http://www.w3.org/1999/xhtml}body')) == body
+    once = etree.tostring(root)
+    normalize_head_meta_children(root)
+    assert etree.tostring(root) == once
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
@@ -48,13 +62,105 @@ from epub3itizer.cli import parse_args  # noqa: E402
 from epub3itizer.repair import repair_epub  # noqa: E402
 
 
+def test_pubu_ploc_becomes_span_without_losing_text_anchor_or_foreign_elements():
+    root = etree.fromstring('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:x="urn:private"><head><title>測試</title></head><body><p>前<ploc id="pos34" class="position">34<b>註記</b></ploc>後</p><x:ploc>外部</x:ploc></body></html>')
+    prior = ''.join(root.itertext())
+    normalize_epubcheck_xhtml(root)
+    assert ''.join(root.itertext()) == prior
+    span = root.find('.//{http://www.w3.org/1999/xhtml}span')
+    assert span.get('id') == 'pos34' and span.get('class') == 'position'
+    assert root.find('.//{urn:private}ploc') is not None
+    once = etree.tostring(root)
+    normalize_epubcheck_xhtml(root)
+    assert etree.tostring(root) == once
+
+
+def test_missing_xhtml_never_falls_back_to_same_stem_stylesheet(tmp_path):
+    from epub3itizer.conversion import find_replacement_resource
+    assert find_replacement_resource('Text/Copyright.xhtml', ['Styles/Copyright.css']) is None
+    assert find_replacement_resource('Text/Copyright.xhtml', ['Styles/Copyright.css', 'Other/Copyright.html']) == 'Other/Copyright.html'
+    (tmp_path/'Copyright.css').write_text('p { color: black; }', encoding='utf-8')
+    page=tmp_path/'toc.xhtml'
+    page.write_text('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>目錄</title></head><body><a href="Copyright.xhtml">版權頁</a></body></html>', encoding='utf-8')
+    repair_missing_xhtml_references(tmp_path)
+    root=etree.parse(str(page)).getroot()
+    assert root.find('.//{http://www.w3.org/1999/xhtml}span').text == '版權頁'
+    once=page.read_bytes()
+    repair_missing_xhtml_references(tmp_path)
+    assert page.read_bytes()==once
+
+
+def test_legacy_toc_keeps_valid_spine_anchor_but_removes_nav_or_missing_targets(tmp_path):
+    from epub3itizer.conversion import strip_links_from_legacy_toc_files
+    (tmp_path/'content.opf').write_text('<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="official.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="chapter"/></spine></package>',encoding='utf-8')
+    (tmp_path/'chapter.xhtml').write_text('<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="chapter-start">正文</h1></body></html>',encoding='utf-8')
+    (tmp_path/'official.xhtml').write_text('<html xmlns="http://www.w3.org/1999/xhtml"><body/></html>',encoding='utf-8')
+    page=tmp_path/'nav.xhtml'
+    page.write_text('<html xmlns="http://www.w3.org/1999/xhtml"><body><nav><a href="chapter.xhtml#chapter-start">有效章節</a><a href="official.xhtml">重複導覽</a><a href="missing.xhtml">缺頁</a></nav></body></html>',encoding='utf-8')
+    strip_links_from_legacy_toc_files(tmp_path,'content.opf')
+    links=etree.parse(str(page)).xpath('//*[local-name()="a"]')
+    assert [a.get('href') for a in links]==['chapter.xhtml#chapter-start',None,None]
+    assert [a.text for a in links]==['有效章節','重複導覽','缺頁']
+    once=page.read_bytes()
+    strip_links_from_legacy_toc_files(tmp_path,'content.opf')
+    assert page.read_bytes()==once
+
+
+def test_archive_invalid_filename_collisions_keep_every_resource_and_reference(tmp_path):
+    from epub3itizer.compat import EpubBookAdapter
+    archive = tmp_path / "collision.epub"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("META-INF/container.xml", '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>')
+        z.writestr("content.opf", '<package xmlns="http://www.idpf.org/2007/opf" version="2.0"><metadata/><manifest><item id="a" href="Text/a*b.xhtml" media-type="application/xhtml+xml"/><item id="b" href="Text/a:b.xhtml" media-type="application/xhtml+xml"/><item id="c" href="Text/ab.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/></spine></package>')
+        for name, text in [("a*b", "第一章"), ("a:b", "第二章"), ("ab", "第三章")]:
+            z.writestr(f"Text/{name}.xhtml", f'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{text}</title></head><body><p>{text}</p><a href="a%3Ab.xhtml#target">下一章</a></body></html>')
+        z.writestr("style.css", 'p{background:url("Text/a*b.xhtml")}')
+        z.writestr("toc.ncx", '<navMap><navPoint><content src="Text/a:b.xhtml#target"/></navPoint></navMap>')
+    with EpubBookAdapter.open(archive) as book:
+        paths = [book.id_to_bookpath(key) for key in ["a", "b", "c"]]
+        assert len(set(paths)) == 3
+        assert all(not re.search(r'[<>:"\\|?*]', path) for path in paths)
+        for path, text in zip(paths, ["第一章", "第二章", "第三章"]):
+            data = (book.root_dir / path).read_text(encoding="utf-8")
+            assert text in data
+            assert Path(paths[1]).name + "#target" in data
+        assert paths[0] in (book.root_dir / "style.css").read_text(encoding="utf-8")
+        assert paths[1] + "#target" in (book.root_dir / "toc.ncx").read_text(encoding="utf-8")
+
+
+def test_archive_path_traversal_is_rejected_before_extraction(tmp_path):
+    from epub3itizer.compat import EpubBookAdapter
+    archive = tmp_path / "unsafe.epub"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("../escape.xhtml", "not safe")
+    with pytest.raises(ValueError, match="不安全路徑"):
+        EpubBookAdapter.open(archive)
+
+
+@pytest.mark.parametrize("titles,expected", [
+    ("<title>製作說明</title><title/>", "製作說明"),
+    ("<title/><title>原有標題</title>", "原有標題"),
+    ("<title/><title> </title>", "chapter.xhtml"),
+])
+def test_duplicate_xhtml_titles_keep_nonempty_title_and_body(titles, expected):
+    root = etree.fromstring(f'<html xmlns="http://www.w3.org/1999/xhtml"><head>{titles}</head><body><p>正文保留</p></body></html>')
+    output, _, _, _ = collect_doc_features(root, "Text/chapter.xhtml")
+    document = etree.fromstring(output.encode("utf-8"))
+    kept = document.xpath('//*[local-name()="head"]/*[local-name()="title"]')
+    assert len(kept) == 1 and kept[0].text == expected
+    assert document.xpath('string(//*[local-name()="body"])') == "正文保留"
+    again, _, _, _ = collect_doc_features(document, "Text/chapter.xhtml")
+    assert etree.tostring(etree.fromstring(again.encode("utf-8")), method="c14n") == etree.tostring(etree.fromstring(output.encode("utf-8")), method="c14n")
+
+
 @pytest.mark.parametrize("declared", ["second", "", "first,second"])
 def test_duplicate_cover_flags_require_unambiguous_metadata(tmp_path, declared):
     from PIL import Image
     (tmp_path / "chapter.xhtml").write_text('<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Text</p></body></html>', encoding="utf-8")
-    for name in ("first", "second"):
-        Image.new("RGB", (2, 2), "red").save(tmp_path / (name + ".jpg"))
+    for name, color in (("first", "red"), ("second", "blue")):
+        Image.new("RGB", (2, 2), color).save(tmp_path / (name + ".jpg"))
     image_before = (tmp_path / "first.jpg").read_bytes()
+    second_before = (tmp_path / "second.jpg").read_bytes()
     cover_meta = "".join(f'<meta name="cover" content="{name}"/>' for name in declared.split(",") if name)
     opf = tmp_path / "content.opf"
     opf.write_text(f'''<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
@@ -67,7 +173,34 @@ def test_duplicate_cover_flags_require_unambiguous_metadata(tmp_path, declared):
     assert covers == (["second"] if declared == "second" else ["first", "second"])
     assert "svg" in root.xpath('//*[local-name()="item" and @id="first"]')[0].get("properties", "")
     assert (tmp_path / "first.jpg").read_bytes() == image_before
-    assert (tmp_path / "second.jpg").read_bytes() == image_before
+    assert (tmp_path / "second.jpg").read_bytes() == second_before
+    first_pass = opf.read_bytes()
+    cleanup_opf_manifest(tmp_path, "content.opf")
+    assert opf.read_bytes() == first_pass
+
+
+@pytest.mark.parametrize("declared", ["", "first,second"])
+def test_duplicate_cover_flags_with_identical_images_preserve_resources(tmp_path, declared):
+    from PIL import Image
+    (tmp_path / "Images").mkdir()
+    Image.new("RGB", (2, 2), "red").save(tmp_path / "Images/first.jpg")
+    image = (tmp_path / "Images/first.jpg").read_bytes()
+    (tmp_path / "Images/second.jpg").write_bytes(image)
+    chapter = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文不變</p><img src="Images/second.jpg"/></body></html>'
+    (tmp_path / "chapter.xhtml").write_text(chapter, encoding="utf-8")
+    cover_meta = "".join(f'<meta name="cover" content="{name}"/>' for name in declared.split(",") if name)
+    opf = tmp_path / "content.opf"
+    opf.write_text(f'''<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Sample</dc:title><dc:language>zh-Hant</dc:language><dc:identifier id="uid">urn:uuid:1</dc:identifier>{cover_meta}</metadata>
+<manifest><item id="first" href="Images/first.jpg" media-type="image/jpeg" properties="cover-image svg"/><item id="second" href="Images/second.jpg" media-type="image/jpeg" properties="cover-image"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="chapter"/></spine></package>''', encoding="utf-8")
+    cleanup_opf_manifest(tmp_path, "content.opf")
+    root = etree.parse(str(opf))
+    assert root.xpath('//*[local-name()="item" and contains(@properties,"cover-image")]/@id') == ["first"]
+    assert "svg" in root.xpath('//*[local-name()="item" and @id="first"]')[0].get("properties", "")
+    assert root.xpath('//*[local-name()="item"]/@href')[:2] == ["Images/first.jpg", "Images/second.jpg"]
+    assert (tmp_path / "Images/first.jpg").read_bytes() == (tmp_path / "Images/second.jpg").read_bytes() == image
+    assert (tmp_path / "chapter.xhtml").read_text(encoding="utf-8") == chapter
     first_pass = opf.read_bytes()
     cleanup_opf_manifest(tmp_path, "content.opf")
     assert opf.read_bytes() == first_pass
@@ -386,6 +519,81 @@ def test_convert_chinese_document_converts_readable_text_quotes_not_links():
     assert 'var name = "“汉字”";' in output
 
 
+def test_chinese_fields_keep_traditional_body_and_japanese_quote():
+    source = '<html><head><title>夜莺别墅</title></head><body><p>皇后于此說話，「卑しい人间、万死に値する。」</p><p>这本书。</p></body></html>'
+    output = convert_chinese_document(source, 's2tw')
+    assert '<title>夜鶯別墅</title>' in output
+    assert '皇后于此說話，「卑しい人间、万死に値する。」' in output
+    assert '這本書。' in output
+
+
+def test_chinese_fields_respect_explicit_literal_glyphs_and_nested_tails():
+    source='<div><span translate="no" title="龙"><i>几内亚</i>与龙</span>这本书<img alt="汉字" src="汉字.png"/></div>'
+    output=convert_chinese_document(source,'s2tw')
+    assert 'title="龙"' in output and '<i>几内亚</i>与龙' in output
+    assert '這本書' in output and 'alt="漢字"' in output and 'src="汉字.png"' in output
+
+
+def test_chinese_fields_convert_publisher_and_short_footnotes_only(tmp_path):
+    from epub3itizer.chinese import convert_chinese_in_package
+    page=tmp_path/'mixed.xhtml'
+    page.write_text('<html><body><p>帶回伙伴，祕密。</p><p>机の上。</p><p>机械工业出版社</p><p>北京日报出版社</p><p>普奇报告。</p><p>《斯图加特报》</p><img alt="《新自由报》" src="报.png"/><a href="日报.xhtml">正體連結</a></body></html>',encoding='utf-8')
+    convert_chinese_in_package(tmp_path,'s2tw')
+    value=page.read_text(encoding='utf-8')
+    assert all(x in value for x in ('帶回伙伴，祕密。','机の上。','機械工業出版社','北京日報出版社','普奇報告。','斯圖加特報','日报.xhtml','alt="《新自由報》"','src="报.png"'))
+    convert_chinese_in_package(tmp_path,'s2tw')
+    assert page.read_text(encoding='utf-8')==value
+
+
+def test_chinese_fields_convert_short_title_author_without_changing_paths():
+    text='<html><head><title>催妆</title></head><body><p>赏饭罚饿</p><p>帶回伙伴，祕密。机の上。</p><img alt="催妆" src="催妆.png"/></body></html>'
+    output=convert_chinese_document(text,'s2tw')
+    assert '<title>催妝</title>' in output and '<p>賞飯罰餓</p>' in output
+    assert '帶回伙伴，祕密。机の上。' in output
+    assert 'alt="催妝"' in output and 'src="催妆.png"' in output
+    names=convert_chinese_document('<div><p>萧枕</p><p>孙相</p><p>圆满</p><a href="萧.xhtml">蕭枕</a></div>','s2tw')
+    assert '<p>蕭枕</p><p>孫相</p><p>圓滿</p>' in names and 'href="萧.xhtml"' in names
+    assert convert_chinese_document(output,'s2tw')==output
+
+
+def test_chinese_fields_keep_japanese_bibliographic_brackets():
+    quote = '〈台湾史の誕生－－『台湾人四百年史』の書誌学的考察〉、（餃子の王将）、《台湾の文学》'
+    output = convert_chinese_document('<p>' + quote + '。这本书。</p>', 's2tw')
+    assert quote in output
+    assert '這本書。' in output
+
+
+def test_chinese_short_nodes_cover_body_navigation_names_and_attributes():
+    source = '<div><h2>军代表吴峥嵘</h2><p>项桓</p><p>顾虑</p><p>怎么</p><a href="军.xhtml">张陈归宿</a><img alt="视线" src="陈.png"/><p>病灶，雇用，佳肴，皇后，干涉。帶回伙伴，祕密。</p></div>'
+    output = convert_chinese_document(source, 's2tw')
+    assert all(text in output for text in ('軍代表吳崢嶸', '<p>項桓</p>', '<p>顧慮</p>', '<p>怎麼</p>', '張陳歸宿', 'alt="視線"', 'href="军.xhtml"', 'src="陈.png"', '病灶，雇用，佳肴，皇后，干涉。帶回伙伴，祕密。'))
+    assert convert_chinese_document(output, 's2tw') == output
+    assert '軍代表吳崢嶸' in convert_chinese_document('<ncx><navLabel><text>军代表吴峥嵘</text></navLabel></ncx>', 's2tw')
+
+
+def test_required_chinese_conversion_does_not_hide_converter_failure(monkeypatch):
+    import pytest
+    from epub3itizer import chinese
+    monkeypatch.setattr(chinese, '_converter', False)
+    with pytest.raises(RuntimeError, match='無法載入'):
+        chinese.convert_chinese_document('<p>军</p>', 's2tw')
+    class BrokenConverter:
+        def convert(self, text):
+            raise RuntimeError('轉換例外')
+    monkeypatch.setattr(chinese, '_converter', BrokenConverter())
+    with pytest.raises(RuntimeError, match='轉換例外'):
+        chinese.convert_chinese_document('<p>军</p>', 's2tw')
+
+
+def test_without_chinese_conversion_does_not_load_optional_dictionary(monkeypatch,tmp_path):
+    import pytest
+    from epub3itizer import chinese
+    monkeypatch.setattr(chinese,'simplified_pattern',lambda *a:pytest.fail('未要求簡轉正，不應讀取可選字典'))
+    monkeypatch.setattr(chinese,'_converter',False)
+    assert chinese.convert_chinese_document('<p>军</p>',None)=='<p>军</p>'
+    chinese.convert_chinese_in_package(tmp_path,None)
+
+
 def test_convert_chinese_cli_option_is_explicit():
     args = parse_args(["input.epub", "-o", "output.epub", "--convert-chinese", "s2tw"])
 
@@ -439,6 +647,79 @@ def test_epubw_full_ad_removed_without_touching_quoted_narrative():
     assert "提供最新最全" not in output
     assert "正文保留。" in output and "後接正文。" in output
     assert "他讀到本書由 ePUBw.COM 整理的字樣。" in output
+
+
+def test_exact_download_disclaimers_and_payment_pitches_preserve_body():
+    root = etree.fromstring('''<html xmlns="http://www.w3.org/1999/xhtml"><head><title>前言</title></head><body>
+<p>本電子書內容收集於網絡，本書僅供個人學習排版之用，請於下載二十四小時內刪除，不得用作任何商業用途。如有喜歡，請支持正版。</p>
+<p>如果你不知道讀什麼書或者想獲得更多免費電子書請加小編QQ：2338856113，http://www.ireadweek.com，如果打不開，可以qq聯繫我</p>
+<p>説明：文中需掃碼閲讀的請掃此付費二維碼。</p>
+<p>掃碼下載「湛廬閱讀」App，搜索「鞋狗」，獲取更多本書信息。</p>
+<p>譯者：毛大慶。</p><p>課程練習請掃碼閱讀出版社補充教材。</p>
+<p>他說：如果你不知道讀什麼書，請到圖書館。</p><p>本書討論免費電子書、QQ及付費二維碼。</p>
+</body></html>'''.encode())
+    output, _, _, _ = collect_doc_features(root, "preface.xhtml")
+    assert "二十四小時" not in output and "2338856113" not in output
+    assert "説明" not in output and "獲取更多本書信息" not in output
+    assert "譯者：毛大慶" in output and "出版社補充教材" in output
+    assert "請到圖書館" in output and "本書討論免費電子書" in output
+
+
+def test_forum_disclaimers_preserve_translator_and_afterword():
+    root = etree.fromstring('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>後記</title></head><body><p>譯者：梁恩嘉</p><p>輕之國度：http://www.lightnovel.cn</p><p>下載後請在24小時內刪除，LK不負擔任何責任</p><p>轉載請保留信息</p><p>我是作者，這是正文與後記。</p><p>他在論壇看到 lightnovel.cn 的討論，並說：禁止轉載SF小說頻道。</p></body></html>'.encode())
+    output, _, _, _ = collect_doc_features(root, "afterword.xhtml")
+    assert "24小時" not in output and "轉載請" not in output
+    assert "譯者：梁恩嘉" in output and "這是正文與後記" in output and "他在論壇看到" in output
+
+
+def test_lightnovel_new_domains_and_joined_disclaimers_keep_afterword():
+    from epub3itizer.conversion import remove_known_source_ad_paragraphs
+    root = etree.fromstring('''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>作者：三田誠</p><p>譯者：周庭旭</p><p>輕之國度：https://www.lightnovel.fun</p>
+<p>輕書架：https://www.lightnovel.app</p><p>輕書架：https://www.lightnovel.life</p>
+<p>下載後請在24小時內刪除，天使動漫與輕書架不負擔任何責任</p>
+<p>下載後請在24小時内删除，LK不負擔任何責任 <br/>請體諒圖源、錄入、校對的辛勤勞動 <br/>不可修改文本檔，轉載請務必保留資訊</p>
+<p>下載後請在24小時内删除，輕之國度不負擔任何責任 <br/>請尊重掃圖、錄入、修圖、校對的辛勤勞動，轉載請保留信息 <br/>本文特别嚴禁轉載至SF輕小說頻道和輕小說文庫</p>
+<p>僅供個人學習交流使用，禁作商業用途 <br/>下載後請在24小時内删除，輕之國度不負擔任何責任</p>
+<p>本文特别嚴禁轉載至SF輕小說頻道和輕小說文庫 <br/>所錄入的每一本書裡，掃圖者有很大一部分功勞！</p>
+<p>作者後記：謝謝讀者。他曾在 lightnovel.app 看見討論。</p>
+<p>下載後請在24小時內刪除，LK不負擔任何責任。這是正文引用。</p>
+</body></html>'''.encode())
+    remove_known_source_ad_paragraphs(root)
+    once=etree.tostring(root)
+    text=''.join(root.itertext())
+    assert '三田誠' in text and '周庭旭' in text and '作者後記' in text
+    assert '正文引用' in text and '看見討論' in text
+    assert '輕書架：https' not in text and '辛勤勞動' not in text and '商業用途' not in text
+    assert 'SF輕小說' not in text and '天使動漫' not in text
+    remove_known_source_ad_paragraphs(root)
+    assert etree.tostring(root)==once
+
+
+def test_tsdm_yidm_and_xuanshu_precise_ads_keep_body_and_credits():
+    root = etree.fromstring('''<html xmlns="http://www.w3.org/1999/xhtml"><head><title>後記</title></head><body>
+<p>作者：あし</p><p>譯者：某Y</p><p>天使動漫：www.tsdm39.net</p>
+<p>下載後請在24小時內刪除，LK與TSDM不負擔任何責任</p>
+<p>1、如果你喜歡該輕小說，請支援作者正版;</p>
+<p>本小說由迷糊輕小說(www.yidm.com)提供閱讀和下載;</p>
+<p>更多精彩，更多好書，盡在選書網—http://Www.xuanshu.Com</p>
+<p>Txt,Epub,Mobi  www.qinkan.net</p>
+<p>正文與後記保留。他說「更多精彩」，又談到 tsdm39.net 的事情。</p>
+</body></html>'''.encode())
+    output, _, _, _ = collect_doc_features(root, "afterword.xhtml")
+    assert "譯者：某Y" in output and "作者：あし" in output
+    assert "正文與後記保留" in output and "又談到 tsdm39.net" in output
+    assert "24小時" not in output and "提供閱讀和下載" not in output
+    assert "xuanshu.Com" not in output and "qinkan.net" not in output
+
+
+def test_677txt_exact_source_pitch_is_removed_but_mentions_are_preserved():
+    for pitch, following in [("推荐一个小说下载必备网址：www.677txt.com", "每天更新，喜欢的去看看。"), ("推薦一個小說下載必備網址：www.677txt.com", "每天更新，喜歡的去看看。")]:
+        root = etree.fromstring(f'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>前言</title></head><body><p>{pitch}</p><p>{following}</p><p>本書作者：鹿燈燈</p><p>正文提及 www.677txt.com，保留引用。</p><p>每天更新，喜歡的去看看。</p></body></html>'.encode())
+        output, _, _, _ = collect_doc_features(root, "preface.xhtml")
+        assert "必備網址" not in output and "必备网址" not in output
+        assert "本書作者：鹿燈燈" in output and "正文提及 www.677txt.com" in output
+        assert output.count("每天更新") == 1
 
 
 def test_yanqingtu_source_ad_paragraphs_are_removed():
@@ -2014,6 +2295,35 @@ def test_missing_image_and_anchor_references_are_repaired(tmp_path):
     assert 'href="missing.xhtml"' not in output
 
 
+def test_missing_aria_references_preserve_valid_labels_and_body(tmp_path):
+    page = tmp_path / "chapter.xhtml"
+    page.write_text(
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>章</title></head>'
+        '<body><h2 id="heading">章名</h2><p id="description">說明</p>'
+        '<section aria-labelledby="heading missing" aria-describedby="missing description">正文</section>'
+        '<div aria-labelledby="other-page" aria-describedby="missing" aria-label="原標籤">保留</div>'
+        '<aside aria-labelledby="heading" aria-describedby="description">附註</aside></body></html>',
+        encoding="utf-8",
+    )
+    (tmp_path / "other.xhtml").write_text('<html><body id="other-page"/></html>', encoding="utf-8")
+    original_text = ''.join(etree.fromstring(page.read_bytes()).itertext())
+
+    repair_missing_xhtml_references(tmp_path)
+
+    root = etree.fromstring(page.read_bytes())
+    section = root.find('.//{http://www.w3.org/1999/xhtml}section')
+    assert section.get('aria-labelledby') == 'heading'
+    assert section.get('aria-describedby') == 'description'
+    div = root.find('.//{http://www.w3.org/1999/xhtml}div')
+    assert div.attrib == {'aria-label': '原標籤'}
+    aside = root.find('.//{http://www.w3.org/1999/xhtml}aside')
+    assert aside.attrib == {'aria-labelledby': 'heading', 'aria-describedby': 'description'}
+    assert ''.join(root.itertext()) == original_text
+    once = page.read_bytes()
+    repair_missing_xhtml_references(tmp_path)
+    assert page.read_bytes() == once
+
+
 def test_image_links_are_converted_to_spans(tmp_path):
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Images").mkdir(parents=True)
@@ -2134,6 +2444,28 @@ def test_missing_css_url_is_removed_when_no_replacement_exists(tmp_path):
     output = css.read_text(encoding="utf-8")
     assert "missing.jpg" not in output
     assert "background: rgba(0,0,0,.2) none" in output
+
+
+def test_embedded_css_resources_use_document_relative_paths_and_preserve_body(tmp_path):
+    (tmp_path / "OEBPS" / "Images").mkdir(parents=True)
+    (tmp_path / "OEBPS" / "Images" / "existing.png").write_bytes(b"image")
+    page = tmp_path / "OEBPS" / "chapter.xhtml"
+    page.write_text('''<html xmlns="http://www.w3.org/1999/xhtml"><head><title>A</title>
+<style>.list {list-style-image:url(../Images/missing.png)}
+.ok {background:url(../Images/existing.png)}
+.remote {background:url(https://example.org/image.png)}</style></head>
+<body><p id="keep" style="background:url(Images/missing.png);color:black">正文 &amp; 引用 url(Images/missing.png)</p>
+<img src="Images/existing.png"/></body></html>''', encoding="utf-8")
+    repair_missing_css_references(tmp_path)
+    output = page.read_text(encoding="utf-8")
+    assert "list-style-image:none" in output
+    assert "background:url(Images/existing.png)" in output
+    assert "https://example.org/image.png" in output
+    assert 'style="background:none;color:black"' in output
+    assert 'id="keep"' in output and "正文 &amp; 引用 url(Images/missing.png)" in output
+    assert 'src="Images/existing.png"' in output
+    repair_missing_css_references(tmp_path)
+    assert page.read_text(encoding="utf-8") == output
 
 
 def test_missing_css_import_is_removed_when_no_replacement_exists(tmp_path):
@@ -2568,6 +2900,24 @@ def test_cleanup_opf_removes_empty_role_meta(tmp_path):
     cleanup_opf_manifest(tmp_path, "content.opf")
 
     assert 'property="role"' not in opf.read_text(encoding="utf-8")
+
+
+def test_cleanup_opf_removes_only_empty_author_link_cache(tmp_path):
+    opf = tmp_path / "content.opf"
+    opf.write_text('''<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" prefix="calibre: https://calibre-ebook.com">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>書名</dc:title><dc:creator>樊文禮</dc:creator><dc:identifier id="uid">urn:uuid:test</dc:identifier><dc:language>zh-Hant</dc:language>
+<meta property="calibre:author_link_map">{"樊文礼":""}</meta>
+<meta name="calibre:author_link_map" content="{}"/>
+<meta property="calibre:author_link_map">{"作者":"https://example.com/author"}</meta>
+<meta property="calibre:author_link_map">not-json</meta>
+</metadata><manifest/><spine/></package>''',encoding="utf-8")
+    cleanup_opf_manifest(tmp_path, "content.opf")
+    result = opf.read_text(encoding="utf-8")
+    assert "樊文礼" not in result
+    assert "樊文禮" in result
+    assert "https://example.com/author" in result and "not-json" in result
+    cleanup_opf_manifest(tmp_path, "content.opf")
+    assert opf.read_text(encoding="utf-8") == result
 
 
 def test_cleanup_opf_removes_empty_epubmerge_meta_and_repairs_modified(tmp_path):
@@ -3091,6 +3441,48 @@ def test_cleanup_opf_removes_invalid_spine_property_tokens(tmp_path):
     assert 'properties="nav"' in output
 
 
+@pytest.mark.parametrize('props', ['layout-blank', 'page-spread-right layout-blank rendition:layout-pre-paginated custom:blank'])
+def test_cleanup_opf_removes_only_private_blank_marker_preserving_page(tmp_path, props):
+    page = tmp_path / 'page.xhtml'
+    page.write_text('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>空頁</title></head><body><p>保留頁面</p></body></html>', encoding='utf-8')
+    original = page.read_bytes()
+    opf = tmp_path / 'content.opf'
+    opf.write_text(f'''<package xmlns="http://www.idpf.org/2007/opf" version="3.0" prefix="custom: https://example.com/">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Sample</dc:title><dc:language>zh-Hant</dc:language></metadata>
+<manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="page" properties="{props}"/></spine></package>''', encoding='utf-8')
+    cleanup_opf_manifest(tmp_path, 'content.opf')
+    root = etree.parse(str(opf))
+    ref = root.xpath('//*[local-name()="itemref"]')[0]
+    assert ref.get('idref') == 'page'
+    assert ref.get('properties', '').split() == [p for p in props.split() if p != 'layout-blank']
+    assert page.read_bytes() == original
+    once = opf.read_bytes()
+    cleanup_opf_manifest(tmp_path, 'content.opf')
+    assert opf.read_bytes() == once
+
+
+def test_cleanup_opf_removes_manifest_dimensions_not_image_content(tmp_path):
+    image = pytest.importorskip('PIL.Image')
+    image.new('RGB', (30, 40)).save(tmp_path / 'page.png')
+    original_image = (tmp_path / 'page.png').read_bytes()
+    page = tmp_path / 'page.xhtml'
+    page.write_text('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>頁面</title></head><body><img src="page.png" width="30" height="40"/></body></html>', encoding='utf-8')
+    original_page = page.read_bytes()
+    opf = tmp_path / 'content.opf'
+    opf.write_text('''<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/>
+<manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/>
+<item id="image" href="page.png" media-type="image/png" width="30" height="40"/></manifest>
+<spine><itemref idref="page"/></spine></package>''', encoding='utf-8')
+    cleanup_opf_manifest(tmp_path, 'content.opf')
+    node = etree.parse(str(opf)).xpath('//*[local-name()="item" and @id="image"]')[0]
+    assert dict(node.attrib) == {'id':'image', 'href':'page.png', 'media-type':'image/png'}
+    assert page.read_bytes() == original_page and (tmp_path / 'page.png').read_bytes() == original_image
+    once = opf.read_bytes()
+    cleanup_opf_manifest(tmp_path, 'content.opf')
+    assert opf.read_bytes() == once
+
+
 def test_cleanup_opf_and_nav_remove_image_spine_and_image_nav_link(tmp_path):
     (tmp_path / "EPUB").mkdir()
     (tmp_path / "EPUB" / "cover.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 20)
@@ -3294,7 +3686,9 @@ def test_cleanup_opf_preserves_reachable_non_linear_xhtml(tmp_path):
     assert 'idref="appendix" linear="no"' in data
 
 
-def test_cleanup_opf_removes_nav_itemref_even_when_id_is_toc(tmp_path):
+@pytest.mark.parametrize("formal_nav", [False, True])
+@pytest.mark.parametrize("empty_spine", [False, True])
+def test_cleanup_opf_only_removes_formal_nav_itemref(tmp_path, formal_nav, empty_spine):
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Text" / "nav.xhtml").write_text("<html/>", encoding="utf-8")
     (tmp_path / "OEBPS" / "Text" / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
@@ -3310,11 +3704,15 @@ def test_cleanup_opf_removes_nav_itemref_even_when_id_is_toc(tmp_path):
         encoding="utf-8",
     )
 
+    if formal_nav:
+        opf.write_text(opf.read_text(encoding="utf-8").replace('id="toc" href=', 'id="toc" properties="nav" href='), encoding="utf-8")
+    if empty_spine:
+        opf.write_text(opf.read_text(encoding="utf-8").replace('<spine><itemref idref="chapter"/><itemref idref="toc" linear="no"/></spine>', '<spine/>'), encoding="utf-8")
     cleanup_opf_manifest(tmp_path, "OEBPS/content.opf")
 
     data = opf.read_text(encoding="utf-8")
     assert 'idref="chapter"' in data
-    assert 'idref="toc"' not in data
+    assert ('idref="toc"' in data) is not formal_nav
 
 
 def test_language_tag_underscore_is_normalized():
@@ -3453,6 +3851,27 @@ def test_orphan_escaped_tag_fragments_are_removed_from_xhtml_text():
     assert "一加一 &gt; 一" in data
 
 
+def test_orphan_cleanup_preserves_complete_escaped_markup_and_code_examples():
+    from epub3itizer.conversion import remove_orphan_escaped_tag_fragments
+    root = parse_xml_recovering('''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+      <p>那&lt;a id="_idTextAnchor000"&gt;&lt;/a&gt;兒。<span/>完整&lt;div aid="123"&gt;範例&lt;/div&gt;。</p>
+      <pre>id="example"&gt;<code>d="snippet"&gt;</code> id="tail"&gt;</pre>
+      <p><code>id="code"&gt;</code> id="orphan"&gt;正文保留。</p>
+      <p id="actual">一加一 &gt; 一。</p>
+    </body></html>''')
+    texts = root.xpath('//*[local-name()="p"]/text()')
+    output, *_ = collect_doc_features(root, 'chapter.xhtml')
+    repaired = parse_xml_recovering(output)
+    assert repaired.xpath('//*[local-name()="p"]/text()')[0] == texts[0]
+    assert '完整<div aid="123">範例</div>。' in ''.join(repaired.itertext())
+    assert repaired.xpath('string(//*[local-name()="pre"])') == 'id="example">d="snippet"> id="tail">'
+    assert repaired.xpath('string(//*[local-name()="p"][*[local-name()="code"]])') == 'id="code"> 正文保留。'
+    assert repaired.xpath('//*[local-name()="p"]/@id') == ['actual']
+    once = etree.tostring(repaired)
+    remove_orphan_escaped_tag_fragments(repaired)
+    assert etree.tostring(repaired) == once
+
+
 def test_cleanup_opf_removes_empty_dc_metadata_and_invalid_raster_images(tmp_path):
     (tmp_path / "OEBPS" / "Images").mkdir(parents=True)
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
@@ -3513,3 +3932,223 @@ def test_cleanup_opf_removes_kmoe_spine_private_attrs(tmp_path):
     assert "kmoe-pagedirect" not in data
     assert "<spine>" in data
     assert 'idref="chapter"' in data
+
+
+@pytest.mark.parametrize("body,cover,remove_page,remove_image", [
+    ('<img src="arbitrary.png"/>', False, True, True),
+    ('正文<img src="arbitrary.png"/>', False, False, False),
+    ('<img src="arbitrary.png"/><img src="other.png"/>', False, False, False),
+    ('<img src="arbitrary.png"/>', True, False, False),
+    ('<p style="background:url(arbitrary.png)">正文</p>', False, False, False),
+])
+def test_known_image_promotions_preserve_content_and_cover(tmp_path, monkeypatch, body, cover, remove_page, remove_image):
+    import hashlib
+    from epub3itizer import conversion as conv
+    from PIL import Image
+    image = tmp_path / 'arbitrary.png'
+    Image.new('RGB', (2, 2), 'white').save(image)
+    Image.new('RGB', (2, 2), 'black').save(tmp_path / 'other.png')
+    monkeypatch.setattr(conv, 'KNOWN_PROMOTIONAL_IMAGE_SHA256', {hashlib.sha256(image.read_bytes()).hexdigest()})
+    (tmp_path / 'ad.xhtml').write_text(f'<html xmlns="{conv.XHTML_NS}"><head><title>頁面</title></head><body>{body}</body></html>', encoding='utf-8')
+    (tmp_path / 'chapter.xhtml').write_text(f'<html xmlns="{conv.XHTML_NS}"><head><title>正文</title></head><body><p>正文內容</p></body></html>', encoding='utf-8')
+    (tmp_path / 'nav.xhtml').write_text(f'<html xmlns="{conv.XHTML_NS}" xmlns:epub="{conv.EPUB_NS}"><head><title>目錄</title></head><body><nav epub:type="toc"><ol><li><a href="ad.xhtml">宣傳</a></li><li><a href="chapter.xhtml">正文</a></li></ol></nav></body></html>', encoding='utf-8')
+    cover_property = ' properties="cover-image"' if cover else ''
+    opf = tmp_path / 'content.opf'
+    opf.write_text(f'<package xmlns="{conv.OPF_NS}" version="3.0"><metadata xmlns:dc="{conv.DC_NS}"><dc:title>測試</dc:title><dc:language>zh-Hant</dc:language></metadata><manifest><item id="ad" href="ad.xhtml" media-type="application/xhtml+xml"/><item id="image" href="arbitrary.png" media-type="image/png"{cover_property}/><item id="other" href="other.png" media-type="image/png"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="ad"/><itemref idref="chapter"/></spine></package>', encoding='utf-8')
+    cleanup_opf_manifest(tmp_path, 'content.opf')
+    cleanup_nav_leaf_spans(tmp_path, 'content.opf')
+    assert (tmp_path / 'ad.xhtml').exists() != remove_page
+    assert image.exists() != remove_image
+    assert (tmp_path / 'other.png').exists()
+    assert ('idref="ad"' in opf.read_text(encoding='utf-8')) != remove_page
+    if remove_page:
+        assert 'href="ad.xhtml"' not in (tmp_path / 'nav.xhtml').read_text(encoding='utf-8')
+    snapshot = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    cleanup_opf_manifest(tmp_path, 'content.opf')
+    cleanup_nav_leaf_spans(tmp_path, 'content.opf')
+    assert snapshot == {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+
+
+def test_unknown_same_name_promotional_image_is_preserved(tmp_path):
+    from epub3itizer.conversion import remove_known_image_only_promotions, OPF_NS
+    image = tmp_path / 'theendinfo.png'
+    image.write_bytes(b'not an approved promotional image')
+    manifest = etree.Element(f'{{{OPF_NS}}}manifest')
+    assert not remove_known_image_only_promotions(tmp_path, '.', manifest, set())
+    assert image.exists()
+
+
+def test_image_promotion_cleanup_preserves_manifest_comments(tmp_path):
+    from epub3itizer.conversion import remove_known_image_only_promotions, OPF_NS
+    manifest = etree.fromstring(f'<manifest xmlns="{OPF_NS}"><!--出版者註解--><item id="chapter" href="chapter.xhtml"/></manifest>')
+    original = etree.tostring(manifest)
+    assert not remove_known_image_only_promotions(tmp_path, '.', manifest, set())
+    assert etree.tostring(manifest) == original
+
+
+@pytest.mark.parametrize('ad', [
+    '★☆★☆★☆輕小說文庫(Www.WenKu8.CN)☆★☆★☆★',
+    '叉叉電子書（WWW.xxdzs2.com)免費TXT小說下載',
+    '叉叉電子書(www.xxdzs2.com）txt電子書下載',
+    '本電子書由叉叉電子書（www.xxdzs2.com）網友上傳分享，網址:http://www.xxdzs2.com',
+    '叉叉電子書(www.xxdzs2.com)免費txt小說電子書下載網站，並支持支持在線閱讀！我們提供的均為全本，叉叉電子書（www.xxdzs2.com)提供最簡單直接的閱讀、下載方式,是讀者的寶藏',
+    '宣告:本書由奇書網(www.qinkan.net)自網路收集整理製作,僅供交流學習使用,版權歸原作者和出版社所有,如果喜歡,請支援正版.',
+])
+def test_exact_xxdzs_qinkan_pitches_keep_quotes_and_story(ad):
+    from epub3itizer.conversion import remove_known_source_ad_paragraphs, XHTML_NS
+    root = etree.fromstring(f'<html xmlns="{XHTML_NS}"><body><p>{ad}</p><p>正文內容</p><p>故事引用「{ad}」，不是獨立宣傳。</p></body></html>')
+    remove_known_source_ad_paragraphs(root)
+    assert len(root.xpath("//*[local-name()='p']")) == 2
+    assert '正文內容' in ''.join(root.itertext())
+    assert '故事引用' in ''.join(root.itertext())
+    snapshot=etree.tostring(root)
+    remove_known_source_ad_paragraphs(root)
+    assert etree.tostring(root)==snapshot
+
+
+def test_qinkan_exact_inline_markers_restore_split_story_words():
+    from epub3itizer.conversion import remove_known_inline_source_ads, XHTML_NS
+    root = etree.fromstring(f'<html xmlns="{XHTML_NS}"><body><p>戰☆奇書網のWww.qinkan.net★甲，一[WWW.qinkan.net奇`書`網]級，千**Www.qinkan.net**年。</p><p>作者後記提及 qinkan.net；普通星號 **重點**。</p></body></html>')
+    remove_known_inline_source_ads(root)
+    assert '戰甲，一級，千年。' in ''.join(root.itertext())
+    assert 'qinkan.net' in ''.join(root.itertext())
+    assert '**重點**' in ''.join(root.itertext())
+
+
+@pytest.mark.parametrize('marker', ['（更d书f享搜索雅 书.YabooK）', '（更d書f享搜索雅書.YabooK）', '（此书更多分享搜索@雅书B）', '（此書更多分享搜索@雅書B）'])
+def test_exact_yabook_pitch_preserves_caption_and_quotation(marker):
+    from epub3itizer.conversion import remove_known_inline_source_ads, XHTML_NS
+    root = etree.fromstring(f'<html xmlns="{XHTML_NS}"><body><p>正文{marker}續文。</p><p>引用「{marker}」保留。</p><p>作者談 YabooK。</p></body></html>')
+    remove_known_inline_source_ads(root)
+    paragraphs = root.xpath("//*[local-name()='p']")
+    assert ''.join(paragraphs[0].itertext()) == '正文續文。'
+    assert marker in ''.join(paragraphs[1].itertext())
+    assert ''.join(paragraphs[2].itertext()) == '作者談 YabooK。'
+    snapshot = etree.tostring(root)
+    remove_known_inline_source_ads(root)
+    assert etree.tostring(root) == snapshot
+
+
+def test_exact_freebook_caption_pitch_across_adjacent_paragraphs():
+    from epub3itizer.conversion import remove_known_inline_source_ads, XHTML_NS
+    root = etree.fromstring(f'<html xmlns="{XHTML_NS}"><body><p><span>圖說1916年。（Free书分</span></p><p><span>享更多搜雅书）</span></p><p>正文（Free書分享更多搜雅書）。</p><p>引用「（Free书分享更多搜雅书）」。</p><p>（Free书分</p><p>普通正文</p><p>享更多搜雅书）</p><!--保留註解--></body></html>')
+    remove_known_inline_source_ads(root)
+    paragraphs = root.xpath("//*[local-name()='p']")
+    assert ''.join(paragraphs[0].itertext()) == '圖說1916年。'
+    assert ''.join(paragraphs[1].itertext()) == ''
+    assert ''.join(paragraphs[2].itertext()) == '正文。'
+    assert 'Free书分享更多搜雅书' in ''.join(paragraphs[3].itertext())
+    assert 'Free书分' in ''.join(paragraphs[4].itertext())
+    assert ''.join(paragraphs[5].itertext()) == '普通正文'
+    snapshot = etree.tostring(root)
+    remove_known_inline_source_ads(root)
+    assert etree.tostring(root) == snapshot
+
+
+@pytest.mark.parametrize('marker', [
+    '[最新電子書免費分享社群，群主V信 1107308023 新增備註電子書]',
+    '[最新电子书免费分享社群，群主V信1107308023新增备注电子书]',
+])
+def test_exact_wechat_promotion_preserves_story_credits_and_quotes(marker):
+    from epub3itizer.conversion import remove_known_inline_source_ads, XHTML_NS
+    root = etree.fromstring(f'<html xmlns="{XHTML_NS}"><body><p>第一段正文{marker}<b>續文</b>{marker}。</p><p>譯者：王小明。</p><p>引用「{marker}」應保留。</p><p>[最新電子書免費分享社群，群主V信999新增備註電子書]</p></body></html>')
+    remove_known_inline_source_ads(root)
+    paragraphs = root.xpath("//*[local-name()='p']")
+    assert ''.join(paragraphs[0].itertext()) == '第一段正文續文。'
+    assert '譯者：王小明' in ''.join(paragraphs[1].itertext())
+    assert marker in ''.join(paragraphs[2].itertext())
+    assert 'V信999' in ''.join(paragraphs[3].itertext())
+    snapshot = etree.tostring(root)
+    remove_known_inline_source_ads(root)
+    assert etree.tostring(root) == snapshot
+
+
+@pytest.mark.parametrize('simplified', [False, True])
+def test_exact_manwu_pitch_preserves_credits_and_story(simplified):
+    from epub3itizer.conversion import remove_known_source_ad_paragraphs, XHTML_NS
+    ad = '本書由「滿屋書香」整理，如果你不知道讀什麼書或者想獲得更多免費電子書請加小編微信：sisijuan2012或QQ：151680600 小編也可以結交一些喜歡讀書的朋友。或者關注小編個人微信公眾號名稱：滿屋書香。 為了方便書友朋友找書和看書，小編自己還在簡書也開闢了一方樂土 ，簡書的網址：https://www.jianshu.com/u/0aea96a9af60'
+    if simplified:
+        ad = ad.translate(str.maketrans('書滿讀麼獲費電請編結歡關個眾號稱為還簡開闢樂網', '书满读么获费电请编结欢关个众号称为还简开辟乐网'))
+    root = etree.fromstring(f'<html xmlns="{XHTML_NS}"><body><p>署名</p><div><span>{ad}</span></div>後接正文<p>他引用「{ad}」</p><p>{ad.replace("151680600", "999")}</p><p>滿屋子都是煙。</p></body></html>')
+    remove_known_source_ad_paragraphs(root)
+    assert not root.xpath("//*[local-name()='div']")
+    assert len(root.xpath("//*[local-name()='p']")) == 4
+    assert '後接正文' in ''.join(root.itertext())
+    assert '滿屋子都是煙。' in ''.join(root.itertext())
+    snapshot = etree.tostring(root)
+    remove_known_source_ad_paragraphs(root)
+    assert etree.tostring(root) == snapshot
+
+
+@pytest.mark.parametrize('extra,unknown,anchor,shared', [('',False,False,False),('正文',False,False,False),('',True,False,False),('',False,True,False),('',False,False,True)])
+def test_promotional_suffix_preserves_notes_and_unmatched_blocks(tmp_path, monkeypatch, extra, unknown, anchor, shared):
+    import hashlib
+    from epub3itizer import conversion as conv
+    image = tmp_path / 'qr.png'
+    image.write_bytes(b'known ad image')
+    text = '如果你不知道讀什麼書，完整已核准導流'
+    monkeypatch.setattr(conv, 'KNOWN_PROMOTIONAL_SUFFIX_TEXT_SHA256', {hashlib.sha256(text.encode()).hexdigest()})
+    monkeypatch.setattr(conv, 'KNOWN_PROMOTIONAL_IMAGE_SHA256', set() if unknown else {hashlib.sha256(image.read_bytes()).hexdigest()})
+    id_attr = ' id="keep"' if anchor else ''
+    page = tmp_path / 'notes.xhtml'
+    page.write_text(f'<html xmlns="{conv.XHTML_NS}"><body><p><a id="note" href="chapter.xhtml#note">註解正文</a></p><p>如果你不知道讀什麼書，</p><p{id_attr}>完整已核准導流<img src="qr.png"/></p>{extra}</body></html>', encoding='utf-8')
+    if shared:
+        (tmp_path / 'chapter.xhtml').write_text(f'<html xmlns="{conv.XHTML_NS}"><body><p>正文</p><img src="qr.png"/></body></html>', encoding='utf-8')
+    manifest = etree.fromstring(f'<manifest xmlns="{conv.OPF_NS}"><item id="notes" href="notes.xhtml"/><item id="qr" href="qr.png"/></manifest>')
+    removed = not (extra or unknown or anchor)
+    assert conv.remove_known_image_only_promotions(tmp_path, '', manifest, set()) == removed
+    result = page.read_text(encoding='utf-8')
+    assert '註解正文' in result and 'id="note"' in result
+    assert ('完整已核准導流' not in result) == removed
+    assert image.exists() == (not removed or shared)
+    snapshot = page.read_bytes()
+    assert not conv.remove_known_image_only_promotions(tmp_path, '', manifest, set())
+    assert page.read_bytes() == snapshot
+
+
+def test_exact_readweek_pitch_preserves_credits_and_story():
+    from epub3itizer.conversion import remove_known_source_ad_paragraphs, XHTML_NS
+    ad = '本書由「行行」整理，如果你不知道讀什麼書或者想獲得更多免費電子書請加小編微信或QQ：2338856113 小編也和結交一些喜歡讀書的朋友 或者關注小編個人微信公眾號名稱：幸福的味道 id：d716-716 為了方便書友朋友找書和看書，小編自己做了一個電子書下載網站，網站的名稱為：周讀 網址：http://www.ireadweek.com'
+    root = etree.fromstring(f'<html xmlns="{XHTML_NS}"><body><p>（美）布萊克著</p><p>姜文波譯</p><p>{ad}</p>後接正文<p>他引用「{ad}」</p><p>{ad.replace("2338856113","999")}</p></body></html>')
+    remove_known_source_ad_paragraphs(root)
+    assert len(root.xpath("//*[local-name()='p']")) == 4
+    assert '布萊克著' in ''.join(root.itertext()) and '姜文波譯' in ''.join(root.itertext())
+    assert '後接正文' in ''.join(root.itertext()) and '他引用' in ''.join(root.itertext())
+    snapshot = etree.tostring(root)
+    remove_known_source_ad_paragraphs(root)
+    assert etree.tostring(root) == snapshot
+
+
+@pytest.mark.parametrize('extra,shared,cover,remove_page,remove_image', [
+    ('',False,False,True,True),
+    ('',True,False,True,False),
+    ('',False,True,False,False),
+    ('<p>後記正文。</p>',False,False,False,False),
+    ('<p>姜文波譯</p>',False,False,False,False),
+    ('<img src="other.png"/>',False,False,False,False),
+])
+def test_readweek_full_page_requires_text_and_image_fingerprints(tmp_path,monkeypatch,extra,shared,cover,remove_page,remove_image):
+    import hashlib
+    from PIL import Image
+    from epub3itizer import conversion as conv
+    text = '如果你不知道讀什麼書，就關注這個微信號。微信公眾號名稱：幸福的味道加小編微信一起讀書小編微信號：2338856113【幸福的味道】已提供200個不同類型的書單1、歷屆茅盾文學獎獲獎作品2、每年豆瓣，噹噹，亞馬遜年度圖書銷售排行榜3、25歲前一定要讀的25本書4、有生之年，你一定要看的25部外國純文學名著5、有生之年，你一定要看的20部中國現當代名著6、美國亞馬遜編輯推薦的一生必讀書單100本7、30個領域30本不容錯過的入門書8、這20本書，是各領域的巔峰之作9、這7本書，教你如何高效讀書10、80萬書蟲力薦的「給五星都不夠」的30本書關注「幸福的味道」微信公眾號，即可查看對應書單和得到電子書也可以在我的網站（周讀）www.ireadweek.com自行下載'
+    assert hashlib.sha256(text.encode()).hexdigest() in conv.KNOWN_PROMOTIONAL_DOCUMENT_TEXT_SHA256
+    image=tmp_path/'qr.jpeg';Image.new('RGB',(2,2),'white').save(image)
+    Image.new('RGB',(2,2),'black').save(tmp_path/'other.png')
+    monkeypatch.setattr(conv,'KNOWN_PROMOTIONAL_IMAGE_SHA256',{hashlib.sha256(image.read_bytes()).hexdigest()})
+    (tmp_path/'ad.xhtml').write_text(f'<html xmlns="{conv.XHTML_NS}"><head><title>宣傳</title></head><body><p>{text}</p><img src="qr.jpeg"/>{extra}</body></html>',encoding='utf-8')
+    shared_image='<img src="qr.jpeg"/>' if shared else ''
+    (tmp_path/'chapter.xhtml').write_text(f'<html xmlns="{conv.XHTML_NS}"><head><title>正文</title></head><body><p>原有正文</p>{shared_image}</body></html>',encoding='utf-8')
+    (tmp_path/'nav.xhtml').write_text(f'<html xmlns="{conv.XHTML_NS}" xmlns:epub="{conv.EPUB_NS}"><head><title>目錄</title></head><body><nav epub:type="toc"><ol><li><a href="ad.xhtml">宣傳</a></li><li><a href="chapter.xhtml">正文</a></li></ol></nav></body></html>',encoding='utf-8')
+    prop=' properties="cover-image"' if cover else ''
+    opf=tmp_path/'content.opf'
+    opf.write_text(f'<package xmlns="{conv.OPF_NS}" version="3.0"><metadata xmlns:dc="{conv.DC_NS}"><dc:title>測試</dc:title><dc:language>zh-Hant</dc:language></metadata><manifest><item id="ad" href="ad.xhtml" media-type="application/xhtml+xml"/><item id="image" href="qr.jpeg" media-type="image/jpeg"{prop}/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="other" href="other.png" media-type="image/png"/></manifest><spine><itemref idref="ad"/><itemref idref="chapter"/></spine></package>',encoding='utf-8')
+    conv.cleanup_opf_manifest(tmp_path,'content.opf');conv.cleanup_nav_leaf_spans(tmp_path,'content.opf')
+    assert (tmp_path/'ad.xhtml').exists()!=remove_page
+    assert image.exists()!=remove_image
+    assert (tmp_path/'other.png').exists()
+    assert ('idref="ad"' in opf.read_text(encoding='utf-8'))!=remove_page
+    if remove_page:assert 'href="ad.xhtml"' not in (tmp_path/'nav.xhtml').read_text(encoding='utf-8')
+    snapshot={p.name:p.read_bytes() for p in tmp_path.iterdir()}
+    conv.cleanup_opf_manifest(tmp_path,'content.opf');conv.cleanup_nav_leaf_spans(tmp_path,'content.opf')
+    assert snapshot=={p.name:p.read_bytes() for p in tmp_path.iterdir()}

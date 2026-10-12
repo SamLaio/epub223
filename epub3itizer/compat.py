@@ -11,6 +11,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from html import unescape
+from urllib.parse import quote, unquote
 
 from lxml import etree
 
@@ -101,6 +103,68 @@ def _normalize_bookpath(href: str) -> str:
     return parts + frag
 
 
+def _extract_epub_archive(zf: zipfile.ZipFile, root: Path) -> None:
+    """在解壓前改名，避免 Windows extractall 的清理造成章節互相覆蓋。"""
+    files = [item for item in zf.infolist() if not item.is_dir()]
+    names = [item.filename for item in files]
+    if len(set(names)) != len(names):
+        raise ValueError("EPUB ZIP 含重複資源名稱，無法安全決定引用目標")
+    invalid = re.compile(r'[<>:"\\|?*\x00-\x1f]')
+    device = re.compile(r'^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)', re.I)
+    mapping: Dict[str, str] = {}
+    used: set[str] = set()
+    reserved = {name.casefold() for name in names}
+    for index, item in enumerate(files):
+        name = item.filename
+        parts = name.split("/")
+        if name.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("EPUB ZIP 含不安全路徑：" + name)
+        # ponytail: 不安全目錄名稱先拒絕；需要支援時再加目錄與引用的完整映射。
+        if any(invalid.search(part) or device.match(part) or part.endswith((".", " ")) for part in parts[:-1]):
+            raise ValueError("EPUB ZIP 含不安全目錄名稱：" + name)
+        filename = parts[-1]
+        target = name
+        if invalid.search(filename) or device.match(filename) or filename.endswith((".", " ")) or name.casefold() in used:
+            suffix = Path(filename).suffix
+            if invalid.search(suffix):
+                raise ValueError("EPUB ZIP 含無法安全辨識的副檔名：" + name)
+            number = index
+            while True:
+                target = posixpath.join(posixpath.dirname(name), f"epub3itizer_resource_{number}{suffix}")
+                if target.casefold() not in reserved | used:
+                    break
+                number += 1
+            mapping[name] = target
+        used.add(target.casefold())
+        path = root / target
+        path.resolve().relative_to(root.resolve())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(zf.read(item))
+    if not mapping:
+        return
+    for item in files:
+        original = item.filename
+        path = root / mapping.get(original, original)
+        if path.suffix.lower() not in {".css", ".html", ".htm", ".ncx", ".opf", ".xhtml", ".xml"}:
+            continue
+        try:
+            text = _read_text_file(path)
+        except UnicodeDecodeError:
+            continue
+        def rewrite(value: str, full_path: bool = False) -> str:
+            base, fragment = _split_href(unescape(value))
+            source = posixpath.normpath(posixpath.join("" if full_path else posixpath.dirname(original), unquote(base)))
+            if source not in mapping:
+                return value
+            target = mapping[source] if full_path else posixpath.relpath(mapping[source], posixpath.dirname(mapping.get(original, original)) or ".")
+            return quote(target, safe="/-._~") + fragment
+        text = re.sub(r'((?:\b|:)href|\bsrc|\bposter|\bdata|\bfull-path)(\s*=\s*)([\'"])(.*?)\3', lambda m: m[1]+m[2]+m[3]+rewrite(m[4], m[1] == "full-path")+m[3], text, flags=re.I)
+        text = re.sub(r'url\(\s*([\'"]?)(.*?)\1\s*\)', lambda m: 'url('+m[1]+rewrite(m[2])+m[1]+')', text, flags=re.I)
+        text = re.sub(r'(@import\s+)([\'"])(.*?)\2', lambda m: m[1]+m[2]+rewrite(m[3])+m[2], text, flags=re.I)
+        text = re.sub(r'(<\?xml[^>]*encoding\s*=\s*)([\'"])[^\'"]+\2', r'\1\2utf-8\2', text, flags=re.I)
+        _write_text_file(path, text)
+
+
 class BookPrefs(dict):
     def __init__(self, store_path: Optional[Path] = None):
         super().__init__()
@@ -175,9 +239,13 @@ class EpubBookAdapter:
             return cls(input_path, source_path=input_path, prefs_path=prefs_path)
 
         tempdir = tempfile.TemporaryDirectory(prefix="epub3itizer_source_")
-        with zipfile.ZipFile(input_path, "r") as zf:
-            zf.extractall(tempdir.name)
-        return cls(Path(tempdir.name), source_path=input_path, tempdir=tempdir, prefs_path=prefs_path)
+        try:
+            with zipfile.ZipFile(input_path, "r") as zf:
+                _extract_epub_archive(zf, Path(tempdir.name))
+            return cls(Path(tempdir.name), source_path=input_path, tempdir=tempdir, prefs_path=prefs_path)
+        except Exception:
+            tempdir.cleanup()
+            raise
 
     def __enter__(self) -> "EpubBookAdapter":
         return self

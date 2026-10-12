@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import json
+import hashlib
 import mimetypes
 import posixpath
 import re
@@ -55,6 +57,23 @@ HTML5_DIMENSION_ELEMENTS = {"canvas", "embed", "iframe", "img", "input", "object
 JAVASCRIPT_MEDIA_TYPES = {"application/javascript", "application/ecmascript", "text/javascript", "text/ecmascript"}
 CALIBRE_BOOKMARKS = {"meta-inf/calibre_bookmarks.txt"}
 PRIVATE_RESIDUE_FILENAMES = {"provider.txt"}
+# 人工逐張確認的純網站宣傳圖；檔名、站名或一般漫畫圖片不作判斷依據。
+KNOWN_PROMOTIONAL_IMAGE_SHA256 = {
+    "ab274662baf612f8a6794791fbd847af98808a60f39622da182d07d50dbe9e18",  # 滿屋書香純導流圖片
+    "65371dd5bedfb6295665c2b2d52d0dc1bfff038734ed8e446cd7bcf3d6242fdd",
+    "cef0217bfcd76756642941eb395a4a3cd3c87afd5bdd66eea8e47f8d2b8fe8b0",
+    "f273f91290fce6aae15b722b0b4e6c4534d32c6cdb8653b9a2099f6e89fadcc3",
+    "1d447b7c06b90cb2eddd07d49ec43ec02f1b5616f5ddc1372f845f9f9fc530df",
+    "5634c760fe6c86ed50cfaef972ba03c478646a5e43c87eca30d40c07973876e6",  # 周讀／幸福的味道純宣傳頁QR圖
+}
+# 去除空白後的完整純宣傳頁文字指紋；增添正文或署名便不再匹配。
+KNOWN_PROMOTIONAL_DOCUMENT_TEXT_SHA256 = {
+    "c571076734b4ae64b966d46799e93aabe6490cdd5db3fa730400d844cc114716",
+}
+# 正文／註解後完整宣傳區塊指紋；須同時驗證每張圖片，不能按起始句刪尾段。
+KNOWN_PROMOTIONAL_SUFFIX_TEXT_SHA256 = {
+    "7b76b7761a31ed0db4dc42b3a29dec203cf449b799f0e353eb28a9c3084d6053",
+}
 PRIVATE_CSS_PROPERTIES = {"duokan-text-indent", "text-spacing-trim"}
 LIST_CONTAINER_ELEMENTS = {"menu", "ol", "ul"}
 FOREIGN_IMAGE_SUFFIXES = {".emf", ".wmf"}
@@ -98,6 +117,8 @@ PHRASING_PARENT_ELEMENTS = {
 BLOCK_TO_INLINE_ELEMENTS = {"address", "article", "aside", "blockquote", "div", "dl", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "li", "nav", "ol", "p", "section", "table", "ul"}
 XHTML_TAG_RENAMES = {
     "case": "div",
+    "chmetcnv": "span",
+    "chsdate": "span",
     "debagame": "div",
     "defaultcase": "div",
     "do": "span",
@@ -106,6 +127,7 @@ XHTML_TAG_RENAMES = {
     "la": "span",
     "mi": "span",
     "order": "span",
+    "ploc": "span",
     "pubu": "div",
     "r": "span",
     "re": "span",
@@ -720,6 +742,20 @@ def normalize_head_text(root: etree._Element) -> None:
 
 def normalize_head_meta_children(root: etree._Element) -> None:
     for head in root.xpath(".//*[local-name()='head']"):
+        for node in list(head):
+            if not isinstance(node.tag, str):
+                continue
+            local = etree.QName(node).localname
+            value = node.get("content", "") if local == "meta" else (node.text or "")
+            # 只清完整已核實的下載器占位廣告，不觸碰正文或一般聯絡資訊。
+            if local in {"title", "meta"} and re.fullmatch(
+                r"下[载載]器[购購][买買][请請](?:联系|聯繫|聯絡)作者QQ[xX]{6}或者微信[xX]{7}",
+                re.sub(r"\s+", "", value),
+            ):
+                if local == "title":
+                    node.text = "正文"
+                else:
+                    head.remove(node)
         for meta in list(head.xpath("./*[local-name()='meta']")):
             insert_at = head.index(meta) + 1
             for child in list(meta):
@@ -839,6 +875,19 @@ def normalize_table_structures(root: etree._Element) -> None:
 
 
 def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None:
+    # 在私有屬性被正規化前核對完整空廣告占位，保留所有尾端正文。
+    for elem in list(root.iter(f"{{{XHTML_NS}}}divclass")):
+        if dict(elem.attrib) != {'__contentadv_': ''} or elem.text or len(elem):
+            continue
+        parent = elem.getparent()
+        if parent is None:
+            continue
+        previous = elem.getprevious()
+        if previous is not None:
+            previous.tail = (previous.tail or '') + (elem.tail or '')
+        else:
+            parent.text = (parent.text or '') + (elem.tail or '')
+        parent.remove(elem)
     normalize_element_ids(root)
     normalize_html_root_structure(root)
     normalize_head_meta_children(root)
@@ -1113,6 +1162,9 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
         for attr in list(elem.attrib):
             attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
             attr_lower = attr_local.lower()
+            if attr == f"{{{EPUB_NS}}}footnote" and not elem.attrib[attr].strip():
+                del elem.attrib[attr]
+                continue
             if namespace == XHTML_NS and (
                 attr_lower == local or (not elem.attrib[attr].strip() and attr_lower in HTML_TAG_NAME_ATTR_RESIDUES)
             ):
@@ -1146,6 +1198,8 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
             elif namespace == XHTML_NS and attr_lower in {"colspan", "rowspan"} and local not in {"td", "th"}:
                 del elem.attrib[attr]
             elif attr_lower == "gallery":
+                del elem.attrib[attr]
+            elif namespace == XHTML_NS and local == "body" and attr_lower in {"link", "vlink", "alink"}:
                 del elem.attrib[attr]
             elif attr_lower == "required-namespace":
                 del elem.attrib[attr]
@@ -1208,6 +1262,7 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
 
 SOURCE_AD_PATTERNS = [
     re.compile(r"qinkan\.net", re.IGNORECASE),
+    re.compile(r"xuanshu\.com", re.IGNORECASE),
     re.compile(r"(?:請|请)看小(?:說|说)(?:網|网)", re.IGNORECASE),
 ]
 
@@ -1217,6 +1272,16 @@ YANQINGTU_AD_PATTERNS = [
 ]
 
 SOURCE_AD_INLINE_PATTERNS = [
+    re.compile(r'(?<![「『“\"])[（(]此[書书]更多分享搜索@雅[書书]B[）)](?![」』”\"])'),
+    re.compile(r'(?<![「『“\"])[（(]更d[書书]f享搜索雅\s*[書书]\.YabooK[）)](?![」』”\"])'),
+    re.compile(r'(?<![「『“\"])[（(]Free[書书]分享更多搜雅[書书][）)](?![」』”\"])'),
+    re.compile(
+        r'(?<![「『“\"])\[最新[電电]子[書书][免][費费]分享社群[，,]群主V信\s*1107308023\s*新增[備备][註注][電电]子[書书]\](?![」』”\"])',
+        re.IGNORECASE,
+    ),
+    re.compile(r"☆奇[書书][網网]の(?:www\.)?qinkan\.net★", re.IGNORECASE),
+    re.compile(r"\[(?:www\.)?qinkan\.net奇`[書书]`[網网]\]", re.IGNORECASE),
+    re.compile(r"\*\*(?:www\.)?qinkan\.net\*\*", re.IGNORECASE),
     re.compile(
         r"[\[\［【（(]?\s*(?:www\.)?qinkan\.net\s*(?:請|请)看小(?:說|说)(?:網|网)\s*[\]\］】）)]?",
         re.IGNORECASE,
@@ -1229,8 +1294,70 @@ SOURCE_AD_INLINE_PATTERNS = [
 
 
 def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
+    # 只清除首頁完整框線內的已核實群號宣傳，任何正文／錨點混入即保留。
+    for body in root.xpath("//*[local-name()='body']"):
+        nodes = list(body)[:11]
+        normalize = lambda s: re.sub(r'\s+', '', s).replace('羣', '群').replace('爲', '為')
+        expected = [
+            '★—————————————————————————————————★', '',
+            '|歡迎加入典盡春衣畫流年小說群|', '',
+            '|群號碼：75687572微信訂閱號：典盡春衣畫流年（每日推薦）|', '',
+            '「進群請報兩本小說書名字敲門，為防小號空號廣告，預設要拿資料全的大號加群哦。」', '',
+            '【附：本小說來自網際網路,本人不做任何負責,小說內容版權歸作者所有】', '',
+            '★—————————————————————————————————★',
+        ]
+        if len(nodes) != 11 or any(not isinstance(n.tag, str) for n in nodes) or [normalize(''.join(n.itertext())) for n in nodes] != expected:
+            continue
+        if any(not isinstance(e.tag, str) or etree.QName(e).localname not in {'p', 'span', 'br'} or e.get('id') or e.get('href')
+               for n in nodes for e in n.iter()) or any((n.tail or '').strip() for n in nodes):
+            continue
+        for n in nodes:
+            body.remove(n)
+
     def is_known_source_ad_text(text: str) -> bool:
+        if re.sub(r'\s+', '', text) in {
+            '姊妹們，請支持《九重紫》進前十，在首頁的榜單上做做廣告！謝謝大家。O（∩_∩）O～',
+            '姊妹们，请支持《九重紫》进前十，在首页的榜单上做做广告！谢谢大家。O（∩_∩）O～',
+        }:
+            return True
         compact = re.sub(r'[\s“”「」\"]+', '', text)
+        site = r"叉叉[電电]子[書书][（(](?:www\.)?xxdzs2\.com[）)]"
+        if re.fullmatch(r"[★☆]+輕小說文庫\((?:www\.)?wenku8\.(?:cn|com)\)[★☆]+", compact, re.IGNORECASE):
+            return True
+        if re.fullmatch(site + r"(?:(?:免費|免费)(?:[電电]子[書书]下[載载]|TXT小[說说]下[載载]|小[說说][在]線[閱阅][讀读]|小[說说]在线[閱阅][讀读])|txt[電电]子[書书]下[載载])", compact, re.IGNORECASE):
+            return True
+        if re.fullmatch(r"本[電电]子[書书]由" + site + r"[網网]友上[傳传]分享[，,][網网]址[:：]https?://(?:www\.)?xxdzs2\.com", compact, re.IGNORECASE):
+            return True
+        long_pitch = '免費txt小說電子書下載網站，並支持支持在線閱讀！我們提供的均為全本，'
+        ending = '提供最簡單直接的閱讀、下載方式,是讀者的寶藏'
+        if re.fullmatch(site + re.escape(long_pitch) + site + re.escape(ending), compact, re.IGNORECASE):
+            return True
+        if re.fullmatch(r"宣告:本書由奇書網\((?:www\.)?qinkan\.net\)自網路收集整理製作,僅供交流學習使用,版權歸原作者和出版社所有,如果喜歡,請支援正版\.", compact, re.IGNORECASE):
+            return True
+        if compact in {
+            '本書由滿屋書香整理，如果你不知道讀什麼書或者想獲得更多免費電子書請加小編微信：sisijuan2012或QQ：151680600小編也可以結交一些喜歡讀書的朋友。或者關注小編個人微信公眾號名稱：滿屋書香。為了方便書友朋友找書和看書，小編自己還在簡書也開闢了一方樂土，簡書的網址：https://www.jianshu.com/u/0aea96a9af60',
+            '本书由满屋书香整理，如果你不知道读什么书或者想获得更多免费电子书请加小编微信：sisijuan2012或QQ：151680600小编也可以结交一些喜欢读书的朋友。或者关注小编个人微信公众号名称：满屋书香。为了方便书友朋友找书和看书，小编自己还在简书也开辟了一方乐土，简书的网址：https://www.jianshu.com/u/0aea96a9af60',
+            "本電子書內容收集於網絡，本書僅供個人學習排版之用，請於下載二十四小時內刪除，不得用作任何商業用途。如有喜歡，請支持正版。",
+            "本电子书内容收集于网络，本书仅供个人学习排版之用，请于下载二十四小时内删除，不得用作任何商业用途。如有喜欢，请支持正版。",
+            "説明：文中需掃碼閲讀的請掃此付費二維碼。",
+            "說明：文中需掃碼閱讀的請掃此付費二維碼。",
+            "说明：文中需扫码阅读的请扫此付费二维码。",
+            "掃碼下載湛廬閱讀App，搜索鞋狗，獲取更多本書信息。",
+            "扫码下载湛庐阅读App，搜索鞋狗，获取更多本书信息。",
+        }:
+            return True
+        if len(compact) <= 600 and compact.startswith(("如果你不知道讀什麼書或者想獲得更多免費電子書請加小編QQ：2338856113", "如果你不知道读什么书或者想获得更多免费电子书请加小编QQ：2338856113")):
+            if "www.ireadweek.com" in compact and compact.endswith(("如果打不開，可以qq聯繫我", "如果打不开，可以qq联系我")):
+                return True
+        if re.fullmatch(
+            r"本[書书]由[『']?行行[』']?整理[，,]如果你不知道[讀读]什[麼么][書书]或者想[獲获]得更多[免][費费][電电]子[書书][請请]加小[編编]微信或QQ[：:]2338856113"
+            r"小[編编]也和[結结]交一些喜[歡欢][讀读][書书]的朋友或者[關关]注小[編编][個个]人微信公[眾众][號号]名[稱称][：:]幸福的味道id[：:]d716-716"
+            r"[為为]了方便[書书]友朋友找[書书]和看[書书][，,]小[編编]自己做了一[個个][電电]子[書书]下[載载][網网]站[，,][網网]站的名[稱称][為为][：:]周[讀读][網网]址[：:]http://www\.ireadweek\.com",
+            compact,
+        ):
+            return True
+        if re.fullmatch(r"Txt,Epub,Mobi(?:www\.)?qinkan\.net", compact, re.IGNORECASE):
+            return True
         if re.fullmatch(
             r"本[書书]由epubw\.com整理[,，]epubw\.com提供最新最全的[優优][質质][電电]子[書书]下[載载][!！]+",
             compact, re.IGNORECASE,
@@ -1256,8 +1383,32 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
         return False
 
     ns = {"x": XHTML_NS}
+    forum_credit_page = bool(re.search(r"(?:lightnovel\.(?:cn|fun|app|life)|sosg\.net|tsdm\d*\.(?:com|net)|yidm\.com)", "".join(root.itertext()), re.IGNORECASE))
     for elem in list(root.xpath(".//x:p | .//x:div | .//x:span", namespaces=ns)):
         text = "".join(elem.itertext()).strip()
+        if forum_credit_page and elem.tag == f"{{{XHTML_NS}}}p" and re.fullmatch(
+            r"(?:[^。！？\n]{0,40}(?:lightnovel\.(?:cn|fun|app|life)|sosg\.net|tsdm\d*\.(?:com|net))[^。！？\n]{0,100}"
+            r"|僅供(?:個人學習交流使用|試看學習交流)，禁作商業用途(?:，下載後請在24小時內刪除)?"
+            r"|(?:僅供個人學習交流使用，禁作商業用途)?下載後請在24小時[內内][刪删]除，(?:LK(?:與TSDM)?|輕之國度|天使動漫與輕書架)不負擔任何責任"
+            r"(?:(?:請體諒圖源、錄入、校對的辛勤勞動不可修改文本檔，轉載請務必保留資訊)|(?:請尊重掃圖、錄入、修圖、校對的辛勤勞動，轉載請保留信息本文特[別别]嚴禁轉載至SF輕小說頻道和輕小說文庫))?"
+            r"|(?:請尊重翻譯、掃圖、錄入、校對的辛勤勞動|轉載請保留完整的資訊，否則往後一律禁止)"
+            r"|[1-6]、(?:如果你喜歡該輕小說，請支援作者正版|該輕小說下載後，請24小時內刪除|該輕小說不得用於商業用途|該小說版權歸原作者及出版文庫，出版社所有|由翻譯組翻譯的輕小說,版權歸翻譯者及原作者所有|繼續閱讀表示同意以上宣告)[;；]?"
+            r"|本小說由迷糊輕小說\(www\.yidm\.com\)提供閱讀和下載[;；]?"
+            r"|SOSG對使用本站小說文本進行違法活動的後果不負任何法律責任"
+            r"|(?:本文特[別别]嚴禁|本小說禁止|禁止)轉載(?:至)?(?:SF輕小說頻道|SF小說頻道|sky-fire小說網)(?:和輕小說文庫)?(?:所錄入的每一本書裡，掃圖者有很大一部分功勞！)?"
+            r"|(?:請尊重[^。！？\n]{1,60}，)?轉載(?:時)?請保留(?:以上)?(?:錄入)?信息"
+            r"|請尊重翻譯、掃圖、錄入、校對的勞動成果|請不要刪除以上信息"
+            r"|[—－]*轉載(?:時請留心注意事項|注意事項)[—－]*|輕小說論壇錄入)", re.sub(r'\s+', '', text), re.IGNORECASE
+        ):
+            elem.getparent().remove(elem)
+            continue
+        if re.fullmatch(r"推[薦荐]一[個个]小[說说]下[載载]必[備备][網网]址[：:]\s*(?:www\.)?677txt\.com", text, re.IGNORECASE):
+            following = elem.getnext()
+            if following is not None and re.fullmatch(r"每天更新[,，]喜[歡欢]的去看看[。.]?", "".join(following.itertext()).strip()):
+                following.getparent().remove(following)
+            if elem.getparent() is not None:
+                elem.getparent().remove(elem)
+            continue
         if not is_known_source_ad_text(text):
             continue
         parent = elem.getparent()
@@ -1274,6 +1425,23 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
 
 
 def remove_known_inline_source_ads(root: etree._Element) -> None:
+    # PDF 轉檔可能把已核實的完整導流括號拆成相鄰兩段；只清除這一種完整組合。
+    for paragraph in root.xpath("//*[local-name()='p']"):
+        following = paragraph.getnext()
+        if following is None or not isinstance(following.tag, str) or etree.QName(following).localname != 'p':
+            continue
+        first = list(paragraph.itertext()); second = list(following.itertext())
+        if not first or not re.search(r'(?<![「『“\"])[（(]Free[書书]分$', first[-1]) or ''.join(second).strip() not in ('享更多搜雅书）', '享更多搜雅書）'):
+            continue
+        for elem in paragraph.iter():
+            for field in ('text', 'tail'):
+                value = getattr(elem, field)
+                if value and re.search(r'[（(]Free[書书]分$', value):
+                    setattr(elem, field, re.sub(r'[（(]Free[書书]分$', '', value))
+        for elem in following.iter():
+            elem.text = None
+            if elem is not following:
+                elem.tail = None
     def clean(value: Optional[str]) -> Optional[str]:
         if not value:
             return value
@@ -1307,16 +1475,29 @@ def remove_orphan_escaped_tag_fragments(root: etree._Element) -> None:
     def clean(value: Optional[str], owner: etree._Element | None = None) -> Optional[str]:
         if not value:
             return value
-        cleaned = value
-        for pattern in ORPHAN_ESCAPED_TAG_FRAGMENT_PATTERNS:
-            cleaned = pattern.sub("", cleaned)
+        # 完整跳脫標籤是文字，不把其中屬性當成孤兒殘片。
+        chunks = re.split(r"(<[^<>]*>)", value)
+        for index in range(0, len(chunks), 2):
+            for pattern in ORPHAN_ESCAPED_TAG_FRAGMENT_PATTERNS:
+                chunks[index] = pattern.sub("", chunks[index])
+        cleaned = "".join(chunks)
         if owner is not None and cleaned != value and not cleaned.strip():
             changed_empty_elements.append(owner)
         return cleaned
 
+    def literal_context(elem: etree._Element | None) -> bool:
+        return elem is not None and any(
+            isinstance(node.tag, str) and etree.QName(node).localname in {"code", "pre", "kbd", "samp"}
+            for node in (elem, *elem.iterancestors())
+        )
+
     for elem in root.iter():
-        elem.text = clean(elem.text, elem)
-        elem.tail = clean(elem.tail)
+        if not isinstance(elem.tag, str):
+            continue
+        if not literal_context(elem):
+            elem.text = clean(elem.text, elem)
+        if not literal_context(elem.getparent()):
+            elem.tail = clean(elem.tail)
 
     for elem in changed_empty_elements:
         parent = elem.getparent()
@@ -1441,9 +1622,14 @@ def collect_doc_features(root: etree._Element, book_href: str) -> Tuple[str, Lis
         if epub_type and elem_id and title:
             epub_types.append((book_href + "#" + elem_id, epub_type, title))
 
-    title = root.find(f".//{{{XHTML_NS}}}head/{{{XHTML_NS}}}title")
-    if title is not None and not "".join(title.itertext()).strip():
-        title.text = posixpath.basename(strip_fragment(book_href)) or "Untitled"
+    titles = root.findall(f".//{{{XHTML_NS}}}head/{{{XHTML_NS}}}title")
+    if titles:
+        title = next((node for node in titles if "".join(node.itertext()).strip()), titles[0])
+        for extra in titles:
+            if extra is not title:
+                extra.getparent().remove(extra)
+        if not "".join(title.itertext()).strip():
+            title.text = posixpath.basename(strip_fragment(book_href)) or "Untitled"
 
     output = etree.tostring(
         root,
@@ -1742,8 +1928,6 @@ def find_replacement_resource(requested: str, candidates: List[str]) -> Optional
             rank = 0
         elif candidate_stem == requested_stem and candidate_kind == requested_kind:
             rank = 10
-        elif candidate_stem == requested_stem and requested_suffix and candidate_suffix:
-            rank = 20
         elif requested_stem in {"cover", "cov"} and candidate_stem in {"cover", "cov"} and candidate_kind == requested_kind:
             rank = 30
         if rank is not None:
@@ -1867,6 +2051,15 @@ def repair_missing_xhtml_references(root_dir: Path) -> None:
                 continue
             qname = etree.QName(elem)
             local = qname.localname
+            for attr in ("aria-labelledby", "aria-describedby"):
+                refs = elem.get(attr, "").split()
+                valid = [ref for ref in refs if ref in ids_for(doc_rel)]
+                if refs != valid:
+                    if valid:
+                        elem.set(attr, " ".join(valid))
+                    else:
+                        del elem.attrib[attr]
+                    changed = True
             image_attr = None
             if qname.namespace == XHTML_NS and local == "img" and elem.get("src"):
                 image_attr = "src"
@@ -2019,21 +2212,46 @@ def repair_missing_css_references(root_dir: Path) -> None:
             return "url(%s%s%s)" % (quote_char, resolved, quote_char)
         return "none"
 
-    for path in root_dir.rglob("*"):
-        if not path.is_file() or path.suffix.lower() != ".css":
-            continue
-        if is_pdf_file(path):
-            continue
-        current_rel = path.relative_to(root_dir).as_posix()
-        data = read_text_file(path)
+    def repair_css(data: str) -> str:
         updated = re.sub(
             r"""@import\s+(?:url\(\s*(['"]?)([^)'"]+)\1\s*\)|(['"])(.*?)\3|([^;\s]+))([^;]*);""",
             css_import_repl,
             data,
         )
-        updated = re.sub(r"url\(\s*(['\"]?)([^)'\"]+)\1\s*\)", css_repl, updated)
-        if updated != data:
-            write_text_file(path, updated)
+        return re.sub(r"url\(\s*(['\"]?)([^)'\"]+)\1\s*\)", css_repl, updated)
+
+    for path in root_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".css", ".html", ".htm", ".xhtml"}:
+            continue
+        if is_pdf_file(path):
+            continue
+        current_rel = path.relative_to(root_dir).as_posix()
+        data = read_text_file(path)
+        if path.suffix.lower() == ".css":
+            updated = repair_css(data)
+            if updated != data:
+                write_text_file(path, updated)
+            continue
+        root = parse_xml_recovering(data)
+        if root is None:
+            continue
+        changed = False
+        for elem in root.iter():
+            if not isinstance(elem.tag, str) or etree.QName(elem).namespace != XHTML_NS:
+                continue
+            if etree.QName(elem).localname == "style" and elem.text:
+                updated = repair_css(elem.text)
+                if updated != elem.text:
+                    elem.text = updated
+                    changed = True
+            if elem.get("style"):
+                updated = repair_css(elem.get("style"))
+                if updated != elem.get("style"):
+                    elem.set("style", updated)
+                    changed = True
+        if changed:
+            write_text_file(path, etree.tostring(root, encoding="utf-8", xml_declaration=True,
+                doctype="<!DOCTYPE html>", pretty_print=False).decode("utf-8"))
 
 
 def convert_bmp_images(root_dir: Path) -> None:
@@ -2276,8 +2494,14 @@ def strip_links_from_legacy_toc_files(root_dir: Path, opf_href: str) -> None:
         return
     opf_dir = posixpath.dirname(opf_href) or "."
     official_nav = ""
+    spine_targets = set()
     try:
         opf_root = parse_xml_recovering(read_text_file(opf_path))
+        items={item.get('id'):item for item in opf_root.findall(f'.//{{{OPF_NS}}}manifest/{{{OPF_NS}}}item')}
+        for ref in opf_root.findall(f'.//{{{OPF_NS}}}spine/{{{OPF_NS}}}itemref'):
+            item=items.get(ref.get('idref'))
+            if item is not None and item.get('media-type')=='application/xhtml+xml' and 'nav' not in item.get('properties','').split():
+                spine_targets.add(posixpath.normpath(posixpath.join(opf_dir,unquote(item.get('href','')))))
         for item in opf_root.findall(f".//{{{OPF_NS}}}item"):
             if "nav" in item.get("properties", "").split() and item.get("href"):
                 official_nav = posixpath.normpath(posixpath.join(opf_dir, unquote(item.get("href", ""))))
@@ -2302,6 +2526,13 @@ def strip_links_from_legacy_toc_files(root_dir: Path, opf_href: str) -> None:
         changed = False
         for elem in root.iter():
             if isinstance(elem.tag, str) and etree.QName(elem).localname == "a" and elem.get("href"):
+                base,fragment=split_href(elem.get('href',''))
+                parts=urlsplit(base)
+                target=posixpath.normpath(posixpath.join(posixpath.dirname(rel),unquote(base)))
+                if base and not parts.scheme and not parts.netloc and target in spine_targets and (root_dir/target).is_file():
+                    doc=parse_xml_recovering(read_text_file(root_dir/target))
+                    if doc is not None and (not fragment or any(node.get('id')==unquote(fragment[1:]) for node in doc.iter())):
+                        continue
                 del elem.attrib["href"]
                 changed = True
         if changed:
@@ -2803,7 +3034,7 @@ def is_invalid_raster_image_resource(path: Path) -> bool:
     return sniff_image_kind(path) is None
 
 
-PRIVATE_OPF_PROPERTY_TOKENS = {"duokan-page-fitwindow", "duokan-page-fullscreen"}
+PRIVATE_OPF_PROPERTY_TOKENS = {"duokan-page-fitwindow", "duokan-page-fullscreen", "layout-blank"}
 PRIVATE_OPF_META_PROPERTIES = {"hdf"}
 KNOWN_OPF_PROPERTY_PREFIXES = {"calibre", "dcterms", "media", "rendition"}
 OPF_META_ALLOWED_ATTRS = {"content", "dir", "id", "name", "property", "refines", "xml:lang"}
@@ -2859,6 +3090,111 @@ def is_unmanifested_nested_cover_copy(rel: str, declared_hrefs: set[str], existi
     if not filename.startswith("cover.") or Path(filename).suffix.lower() not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
         return False
     return "/".join(opf_parts + [filename]) in existing_hrefs
+
+
+def remove_known_image_only_promotions(root_dir: Path, opf_dir: str, manifest: etree._Element, cover_ids: set[str]) -> bool:
+    """移除已知宣傳圖的純圖片頁及核准全文指紋頁；保留正文、封面與共用資源。"""
+    def local_target(doc: Path, value: str) -> Optional[Path]:
+        parts = urlsplit(value)
+        if parts.scheme or parts.netloc or not parts.path:
+            return None
+        target = (doc.parent / unquote(parts.path)).resolve()
+        return target if target.is_relative_to(root_dir.resolve()) else None
+
+    protected = {
+        (root_dir / opf_dir / unquote(item.get("href", ""))).resolve()
+        for item in manifest
+        if isinstance(item.tag, str) and (item.get("id") in cover_ids or "cover-image" in (item.get("properties") or "").split())
+    }
+    known = {
+        path.resolve() for path in root_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg"} and path.stat().st_size < 1_000_000
+        and hashlib.sha256(path.read_bytes()).hexdigest() in KNOWN_PROMOTIONAL_IMAGE_SHA256
+        and path.resolve() not in protected
+    }
+    if not known:
+        return False
+    documents = {}
+    removed = set()
+    suffix_changed = False
+    for path in sorted(root_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".html", ".htm", ".xhtml"}:
+            continue
+        try:
+            doc = parse_xml_recovering(read_text_file(path))
+        except Exception:
+            continue
+        documents[path.resolve()] = doc
+        bodies = doc.xpath("//*[local-name()='body']")
+        if not bodies or path.resolve() in protected:
+            continue
+        body = bodies[0]
+        for first in list(body):
+            if ''.join(first.itertext()).strip() != '如果你不知道讀什麼書，':
+                continue
+            suffix = list(body)[list(body).index(first):]
+            suffix_text = ''.join(''.join(e.itertext()) + (e.tail or '') for e in suffix)
+            fingerprint = hashlib.sha256(''.join(suffix_text.split()).encode('utf-8')).hexdigest()
+            if fingerprint not in KNOWN_PROMOTIONAL_SUFFIX_TEXT_SHA256:
+                continue
+            elems = [e for node in suffix for e in node.iter() if isinstance(e.tag, str)]
+            if any(etree.QName(e).localname not in {'p', 'span', 'br', 'img'} or e.get('id') for e in elems):
+                continue
+            images = [e for e in elems if etree.QName(e).localname == 'img']
+            if not images or any(local_target(path, e.get('src', '')) not in known for e in images):
+                continue
+            for node in suffix:
+                body.remove(node)
+            path.write_bytes(etree.tostring(doc, encoding='utf-8', xml_declaration=True))
+            suffix_changed = True
+            break
+        text = "".join("".join(body.itertext()).split())
+        if text and hashlib.sha256(text.encode("utf-8")).hexdigest() not in KNOWN_PROMOTIONAL_DOCUMENT_TEXT_SHA256:
+            continue
+        allowed = {"body", "div", "p", "span", "br", "img", "svg", "image"}
+        if any(isinstance(e.tag, str) and etree.QName(e).localname not in allowed for e in body.iter()):
+            continue
+        images = body.xpath(".//*[local-name()='img' or local-name()='image']")
+        refs = [local_target(path, e.get("src") or e.get("href") or e.get(f"{{{XLINK_NS}}}href", "")) for e in images]
+        if refs and all(ref in known for ref in refs):
+            removed.add(path.resolve())
+    referenced = set()
+    for path, doc in documents.items():
+        if path in removed:
+            continue
+        changed = False
+        for elem in doc.iter():
+            for attr, value in list(elem.attrib.items()):
+                if etree.QName(attr).localname not in {"src", "href"}:
+                    continue
+                target = local_target(path, value)
+                if target in removed:
+                    elem.attrib.pop(attr)
+                    if etree.QName(elem).localname == "a":
+                        elem.tag = f"{{{XHTML_NS}}}span"
+                    changed = True
+                elif target:
+                    referenced.add(target)
+        if changed:
+            path.write_bytes(etree.tostring(doc, encoding="utf-8", xml_declaration=True))
+        styles = doc.xpath("//*[local-name()='style']/text() | //@style")
+        for style in styles:
+            for value in re.findall(r"url\(\s*['\"]?([^)'\"]+)", str(style), re.I):
+                target = local_target(path, value.strip())
+                if target:
+                    referenced.add(target)
+    for path in root_dir.rglob("*.css"):
+        for value in re.findall(r"url\(\s*['\"]?([^)'\"]+)", read_text_file(path), re.I):
+            target = local_target(path, value.strip())
+            if target:
+                referenced.add(target)
+    removed.update(known - referenced)
+    for item in list(manifest):
+        if isinstance(item.tag, str) and (root_dir / opf_dir / unquote(item.get("href") or "")).resolve() in removed:
+            manifest.remove(item)
+    for path in removed:
+        path.unlink(missing_ok=True)
+    return bool(removed) or suffix_changed
 
 
 def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
@@ -2970,6 +3306,8 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             if meta.get("content")
         }
 
+    changed = remove_known_image_only_promotions(root_dir, opf_dir, manifest, cover_meta_ids) or changed
+
     def duplicate_manifest_priority(item: etree._Element) -> int:
         score = 0
         if item.get("id", "") in cover_meta_ids:
@@ -3051,7 +3389,7 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
     for item in manifest_items():
         for attr in list(item.attrib):
             attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
-            if attr_local in PRIVATE_OPF_PROPERTY_TOKENS:
+            if attr_local in PRIVATE_OPF_PROPERTY_TOKENS or attr in {"height", "width"}:
                 item.attrib.pop(attr, None)
                 changed = True
         item_id = item.get("id", "")
@@ -3208,12 +3546,46 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             href = item.get("href", "")
             if item.get("media-type") != "application/xhtml+xml":
                 continue
-            if posixpath.basename(unquote(href)).lower() in {"nav.html", "nav.xhtml"}:
+            if "nav" in item.get("properties", "").split():
                 continue
             itemref = etree.SubElement(spine, f"{{{OPF_NS}}}itemref")
             itemref.set("idref", item.get("id", ""))
             changed = True
     manifest_ids = {item.get("id", "") for item in manifest_items()}
+    # 僅以完整原目錄救回只剩封面／版權頁的 spine，不猜測正文順序。
+    xhtml_items = {
+        posixpath.normpath(posixpath.join(opf_dir, unquote(item.get("href", "")))): item
+        for item in manifest_items()
+        if item.get("media-type") == "application/xhtml+xml"
+        and "nav" not in item.get("properties", "").split()
+    }
+    current_ids = {ref.get("idref", "") for ref in spine_itemrefs()}
+    front_ids = {item.get("id", "") for path, item in xhtml_items.items()
+                 if posixpath.basename(path).lower() in {"cover.xhtml", "copyright.xhtml", "cover.html", "copyright.html"}}
+    if current_ids and current_ids <= front_ids and len(xhtml_items) > len(current_ids):
+        for nav_item in manifest_items():
+            if "nav" not in nav_item.get("properties", "").split():
+                continue
+            nav_path = posixpath.normpath(posixpath.join(opf_dir, unquote(nav_item.get("href", ""))))
+            try:
+                nav_root = parse_xml_recovering(read_text_file(root_dir / nav_path))
+            except Exception:
+                continue
+            ordered = []
+            for anchor in nav_root.xpath("//*[local-name()='nav' and @epub:type='toc']//*[local-name()='a'][@href]", namespaces={"epub": "http://www.idpf.org/2007/ops"}):
+                href = anchor.get("href", "")
+                if urlsplit(href).scheme or urlsplit(href).netloc:
+                    continue
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(nav_path), unquote(split_href(href)[0])))
+                if target in xhtml_items and target not in ordered:
+                    ordered.append(target)
+            if set(ordered) == set(xhtml_items):
+                for ref in spine_itemrefs():
+                    spine.remove(ref)
+                for target in ordered:
+                    etree.SubElement(spine, f"{{{OPF_NS}}}itemref", idref=xhtml_items[target].get("id", ""))
+                changed = True
+                break
     if spine is not None:
         for attr in list(spine.attrib):
             attr_local = etree.QName(attr).localname if attr.startswith("{") else attr
@@ -3273,7 +3645,7 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                     spine.remove(itemref)
                     changed = True
                     continue
-                if posixpath.basename(unquote(href)).lower() in {"nav.html", "nav.xhtml"}:
+                if "nav" in manifest_item.get("properties", "").split():
                     spine.remove(itemref)
                     changed = True
                     continue
@@ -3297,9 +3669,27 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                     itemref.attrib.pop("linear", None)
                     changed = True
 
+    for item in manifest_items():
+        properties = item.get("properties", "").split()
+        if "cover-image" in properties and not item.get("media-type", "").startswith("image/"):
+            # 封面頁不是封面圖；只移除非法旗標，保留文件及其他屬性。
+            tokens = [token for token in properties if token != "cover-image"]
+            if tokens:
+                item.set("properties", " ".join(tokens))
+            else:
+                item.attrib.pop("properties", None)
+            changed = True
     cover_items = [item for item in manifest_items() if "cover-image" in item.get("properties", "").split()]
     declared_covers = [item for item in cover_items if item.get("id") in cover_meta_ids and item.get("media-type", "").startswith("image/")]
-    # Only resolve duplicate cover flags when existing metadata identifies one image.
+    if len(cover_items) > 1 and len(declared_covers) != 1 and all(item.get("media-type", "").startswith("image/") for item in cover_items):
+        # 相同圖片位元組無封面內容歧義；只移除多餘標記，不刪圖片或改引用。
+        cover_bytes = [
+            (root_dir / Path(posixpath.normpath(posixpath.join(opf_dir, unquote(item.get("href", "")))))).read_bytes()
+            for item in cover_items
+        ]
+        if all(data == cover_bytes[0] for data in cover_bytes[1:]):
+            declared_covers = [cover_items[0]]
+    # Resolve only with one declared image or byte-identical cover candidates.
     if len(cover_items) > 1 and len(declared_covers) == 1:
         for item in cover_items:
             if item is declared_covers[0]:
@@ -3339,6 +3729,16 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
     for meta in metadata.xpath(".//*[local-name()='meta']"):
         if not isinstance(meta.tag, str):
             continue
+        if meta.get("property") == "calibre:author_link_map" or meta.get("name") == "calibre:author_link_map":
+            try:
+                links = json.loads(meta.get("content") if meta.get("content") is not None else meta.text or "")
+            except (TypeError, ValueError):
+                links = None
+            # 空連結快取沒有可用作者網址；非空或未知 JSON 保留。
+            if isinstance(links, dict) and all(value in (None, "") for value in links.values()):
+                metadata.remove(meta)
+                changed = True
+                continue
         if etree.QName(meta).namespace == DC_NS:
             meta.tag = f"{{{OPF_NS}}}meta"
             changed = True
