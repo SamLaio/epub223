@@ -10,6 +10,7 @@ import re
 import sys
 import uuid
 import zipfile
+from html.parser import HTMLParser
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -428,6 +429,53 @@ def sanitize_namespace_declarations(data: str) -> str:
     return re.sub(r"<(?![!?/])[^<>]+>", dedupe_xmlns, data)
 
 
+def repair_xhtml_paragraph_boundaries(data: str) -> str:
+    """只改錯誤 p 邊界；原始文字、屬性、註解與外來命名空間不重序列化。"""
+    offsets = [0]
+    for match in re.finditer("\n", data):
+        offsets.append(match.end())
+    edits = []
+
+    class Paragraphs(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.in_body = False
+            self.open_p = False
+
+        def position(self):
+            line, column = self.getpos()
+            return offsets[line - 1] + column
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "body":
+                self.in_body = True
+            if self.in_body and tag == "p":
+                if self.open_p:
+                    pos = self.position()
+                    edits.append((pos, pos, "</p>"))
+                self.open_p = True
+
+        def handle_endtag(self, tag):
+            if not self.in_body:
+                return
+            pos = self.position()
+            if tag == "p":
+                if not self.open_p:
+                    edits.append((pos, data.index(">", pos) + 1, ""))
+                self.open_p = False
+            elif tag == "body":
+                if self.open_p:
+                    edits.append((pos, pos, "</p>"))
+                self.open_p = False
+                self.in_body = False
+
+    parser = Paragraphs()
+    parser.feed(data)
+    for start, end, replacement in reversed(edits):
+        data = data[:start] + replacement + data[end:]
+    return data
+
+
 def parse_xml_recovering(data: str) -> etree._Element:
     data = sanitize_namespace_declarations(data)
     if data.strip() and "<" not in data:
@@ -440,6 +488,12 @@ def parse_xml_recovering(data: str) -> etree._Element:
     try:
         return etree.fromstring(data.encode("utf-8"), XML_PARSER)
     except etree.XMLSyntaxError:
+        if XHTML_NS in data and re.search(r"<body\b", data, re.I):
+            repaired = repair_xhtml_paragraph_boundaries(data)
+            try:
+                return etree.fromstring(repaired.encode("utf-8"), XML_PARSER)
+            except etree.XMLSyntaxError:
+                pass
         return etree.fromstring(data.encode("utf-8"), RECOVER_XML_PARSER)
 
 
@@ -1315,6 +1369,22 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
             body.remove(n)
 
     def is_known_source_ad_text(text: str) -> bool:
+        plain = re.sub(r'\s+', '', text)
+        if re.fullmatch(r'更多精彩[熱热][門门]日本[輕轻]小[說说]、[動动]漫小[說说]，[輕轻]小[說说]文[庫库]\(https?://(?:www\.)?wenku8\.(?:com|cn)\)[為为]你一[網网]打[盡尽]！', plain):
+            return True
+        if re.fullmatch(r'[請请]收藏本站[：:]https?://\.bg60。[筆笔]趣[閣阁]手[機机]版[：:]https?://m\.bg60', plain):
+            return True
+        if re.fullmatch(r'[^|「」“”]+小說作品集\|[^|「」“”]+\|鳳鳴軒言情小說書庫', plain):
+            return True
+        if re.fullmatch(r'位置：首頁作家列表[^|「」“”]+字體大小默認字型9pt10pt11pt12pt13pt14pt15pt16pt17pt18pt20pt25pt30pt35pt40pt45pt50pt背景顏色牋牋牋牋', plain):
+            return True
+        if plain in {'＊＊＊牋鳳鳴軒獨家制作牋＊＊＊牋bbs.fmx.cn牋＊＊＊', '＊＊＊牋鳳鳴軒獨家製作牋＊＊＊牋bbs.fmx.cn牋＊＊＊'}:
+            return True
+        if re.sub(r'\s+', '', text) in {
+            '名牌球鞋NIKE,ADIDAS通通1200(臺幣)',
+            'LV,GUCCI,Chanel,NIKE,ADIDAS,Timberland,ROLEX,OMEGA,Cartier,Armani,AF,APE..',
+        }:
+            return True
         if re.sub(r'\s+', '', text) in {
             '姊妹們，請支持《九重紫》進前十，在首頁的榜單上做做廣告！謝謝大家。O（∩_∩）O～',
             '姊妹们，请支持《九重紫》进前十，在首页的榜单上做做广告！谢谢大家。O（∩_∩）O～',
@@ -1386,6 +1456,25 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
     forum_credit_page = bool(re.search(r"(?:lightnovel\.(?:cn|fun|app|life)|sosg\.net|tsdm\d*\.(?:com|net)|yidm\.com)", "".join(root.itertext()), re.IGNORECASE))
     for elem in list(root.xpath(".//x:p | .//x:div | .//x:span", namespaces=ns)):
         text = "".join(elem.itertext()).strip()
+        if elem.tag == f"{{{XHTML_NS}}}p" and re.fullmatch(
+            r"附[：:]【本作品[來来]自[網网](?:際網路|络)及出版[圖图][書书][,，]本人不做任何[負负][責责]】[內内]容版[權权][歸归]作者所有",
+            re.sub(r'\s+', '', text),
+        ) and not any(e.get('id') or e.get('href') for e in elem.iter()) and not (elem.tail or '').strip():
+            elem.getparent().remove(elem)
+            continue
+        # 同頁論壇網域加完整文字指紋；署名、引用、錨點及相鄰尾文保留。
+        if forum_credit_page and elem.tag == f"{{{XHTML_NS}}}p" and re.fullmatch(
+            r"(?:本文僅供個人學習交流使用，禁作商業用途|如需轉載請經過(?:翻譯)?本人同意(?:並保留所有信息)?|推薦使用『多看閱讀』)",
+            re.sub(r'\s+', '', text),
+        ) and not any(e.get('id') or e.get('href') for e in elem.iter()) and not (elem.tail or '').strip():
+            elem.getparent().remove(elem)
+            continue
+        if 'wenku8' in text.lower() and any(e.get('id') or e.get('href') for e in (*elem.iter(), *elem.iterancestors())):
+            continue  # 完整宣傳也不能刪除有效錨點或連結。
+        if 'bg60' in text and any(e.get('id') or e.get('href') for e in (*elem.iter(), *elem.iterancestors())):
+            continue  # 精確來源頁尾也不能移除錨點或內部連結。
+        if '鳳鳴軒' in text and any(e.get('id') or e.get('href') for e in elem.iter()):
+            continue  # 導覽／宣傳含錨點時保留，不能因文字指紋而造成斷鏈。
         if forum_credit_page and elem.tag == f"{{{XHTML_NS}}}p" and re.fullmatch(
             r"(?:[^。！？\n]{0,40}(?:lightnovel\.(?:cn|fun|app|life)|sosg\.net|tsdm\d*\.(?:com|net))[^。！？\n]{0,100}"
             r"|僅供(?:個人學習交流使用|試看學習交流)，禁作商業用途(?:，下載後請在24小時內刪除)?"
@@ -1729,18 +1818,18 @@ def write_ncx_file(src_path: Path, ncx_href: str, doctitle: Optional[str], toc_n
 
     def add_node(parent: etree._Element, node: TocNode) -> None:
         nonlocal counter
-        if strip_fragment(node.href) in seen_targets:
+        if node.href in seen_targets:
             for child in node.children:
                 add_node(parent, child)
             return
-        seen_targets.add(strip_fragment(node.href))
+        seen_targets.add(node.href)
         nav_point = etree.SubElement(parent, f"{{{NCX_NS}}}navPoint", id="navPoint-%d" % counter, playOrder=str(counter))
         counter += 1
         nav_label = etree.SubElement(nav_point, f"{{{NCX_NS}}}navLabel")
         etree.SubElement(nav_label, f"{{{NCX_NS}}}text").text = node.label.strip() or posixpath.basename(strip_fragment(node.href)) or "Untitled"
-        base, _frag = split_href(node.href)
+        base, frag = split_href(node.href)
         src = posixpath.relpath(base, start=ncx_dir) if ncx_dir != "." else base
-        etree.SubElement(nav_point, f"{{{NCX_NS}}}content", src=src)
+        etree.SubElement(nav_point, f"{{{NCX_NS}}}content", src=src + frag)
         for child in node.children:
             add_node(nav_point, child)
 
@@ -2760,12 +2849,22 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
                 for index in [nav_target_spine_index(anchor.get("href", ""))]
                 if index is not None
             ]
-            if child_indices and parent_index >= min(child_indices):
+            # 同一 spine 檔案中的不同錨點仍是獨立入口，不能當作重複分組連結。
+            duplicate_target = any(
+                unquote(anchor.get("href", "")) == unquote(direct_anchor.get("href", ""))
+                for ol in child_ols
+                for anchor in ol.xpath(".//*[local-name()='a'][@href]")
+            )
+            if child_indices and parent_index >= min(child_indices) and duplicate_target:
                 direct_anchor.attrib.pop("href", None)
                 direct_anchor.tag = f"{{{XHTML_NS}}}span"
                 changed = True
         seen_fragment_for_spine: set[str] = set()
         for anchor in list(root.xpath(".//*[local-name()='nav']//*[local-name()='a'][@href]")):
+            if not any(isinstance(nav.tag, str) and etree.QName(nav).localname == 'nav'
+                       and 'toc' in nav.get('{%s}type' % EPUB_NS, nav.get('type', '')).split()
+                       for nav in anchor.iterancestors()):
+                continue  # 章內目錄與正文地標／頁碼是獨立入口，不跨導覽去重。
             href = anchor.get("href", "")
             base, frag = split_href(href)
             parts = urlsplit(base)
@@ -4158,10 +4257,10 @@ def filter_toc_to_spine(toc_nodes: List[TocNode], spine_hrefs: Iterable[str]) ->
         spine_map = {posixpath.normpath(unquote(href)).lower(): href for href in resolved_spine_hrefs}
         direct = spine_map.get(norm_base.lower())
         if direct:
-            return direct
+            return direct + frag
         replacement = find_replacement_resource(base, resolved_spine_hrefs)
         if replacement and posixpath.normpath(unquote(replacement)).lower() in spine_map:
-            return replacement
+            return replacement + frag
         return None
 
     def keep(nodes: List[TocNode]) -> List[TocNode]:

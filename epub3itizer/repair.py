@@ -35,6 +35,166 @@ def repair_epub_contents(root_dir: Path, opf_href: str) -> None:
     repair_obfuscated_font_media_types(root_dir, opf_href)
     repair_ncx_placeholder_titles(root_dir, opf_href)
     repair_horizontal_spine_direction(root_dir, opf_href)
+    repair_missing_numbered_nav_entry(root_dir, opf_href)
+    repair_body_fragment_links(root_dir)
+
+
+
+def repair_body_fragment_links(root_dir: Path) -> None:
+    """將指向唯一 body ID 的本機連結改連至頁面，保留其他錨點與正文。"""
+    from urllib.parse import unquote, urlsplit, urlunsplit
+    from lxml import etree
+
+    root_dir = root_dir.resolve()
+    documents = {}
+    bodies = {}
+    for path in root_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".xhtml", ".html", ".htm", ".ncx"}:
+            continue
+        path = path.resolve()
+        if not path.is_relative_to(root_dir):
+            continue
+        try:
+            tree = etree.parse(str(path), etree.XMLParser(resolve_entities=False, no_network=True))
+        except etree.XMLSyntaxError:
+            continue
+        # xml:base 會改變連結基準；無法依檔案位置安全判定時保留。
+        if tree.xpath("//@xml:base", namespaces={"xml": "http://www.w3.org/XML/1998/namespace"}):
+            continue
+        if tree.find(f".//{{{conv.XHTML_NS}}}base") is not None:
+            continue
+        documents[path] = tree
+        body = tree.find(f"{{{conv.XHTML_NS}}}body")
+        if body is not None and body.get("id"):
+            body_id = body.get("id")
+            if len(tree.xpath("//*[@id=$value]", value=body_id)) == 1:
+                bodies[path] = body_id
+
+    for path, tree in documents.items():
+        changed = False
+        for node in tree.iter():
+            for attribute in ("href", "src"):
+                href = node.get(attribute)
+                if not href:
+                    continue
+                try:
+                    url = urlsplit(href)
+                except ValueError:
+                    continue
+                if url.scheme or url.netloc or url.query or not url.fragment:
+                    continue
+                target = (path.parent / unquote(url.path)).resolve() if url.path else path
+                if bodies.get(target) != unquote(url.fragment):
+                    continue
+                node.set(attribute, urlunsplit(("", "", url.path or path.name, "", "")))
+                changed = True
+        if changed:
+            tree.write(str(path), encoding="utf-8", xml_declaration=True)
+
+
+def repair_missing_numbered_nav_entry(root_dir: Path, opf_href: str) -> None:
+    """只補入兩個連號同層目錄之間、已有完整正文的單一漏列章節。"""
+    import posixpath
+    import re
+    from urllib.parse import quote, unquote, urlsplit
+    from lxml import etree
+
+    root_dir = root_dir.resolve()
+    opf = root_dir / opf_href
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    package = etree.fromstring(opf.read_bytes(), parser)
+    items = package.findall(f'{{{conv.OPF_NS}}}manifest/{{{conv.OPF_NS}}}item')
+    navs = [e for e in items if 'nav' in e.get('properties', '').split()]
+    if len(navs) != 1 or any(e.get('media-type') == 'application/x-dtbncx+xml' for e in items):
+        return
+
+    def local(base: Path, href: str) -> Optional[Path]:
+        url = urlsplit(href)
+        if url.scheme or url.netloc or url.fragment or url.query or not url.path:
+            return None
+        path = (base / unquote(url.path)).resolve()
+        try:
+            path.relative_to(root_dir)
+        except ValueError:
+            return None
+        return path if path.is_file() else None
+
+    def ordinal(label: str):
+        match = re.match(r'^第\s*([0-9０-９零〇一二三四五六七八九十百千兩两]+)\s*([章回])', label)
+        if not match:
+            return None
+        text = match[1].translate(str.maketrans('０１２３４５６７８９兩两〇', '0123456789二二零'))
+        if text.isdigit():
+            return int(text), match[2]
+        digits = dict(zip('零一二三四五六七八九', range(10)))
+        units = {'十': 10, '百': 100, '千': 1000}
+        if any(c not in digits and c not in units for c in text):
+            return None
+        if not any(c in units for c in text):
+            return int(''.join(str(digits[c]) for c in text)), match[2]
+        total = current = 0
+        for char in text:
+            if char in digits:
+                current = digits[char]
+            elif char in units:
+                total += (current or 1) * units[char]
+                current = 0
+            else:
+                return None
+        return total + current, match[2]
+
+    nav_path = local(opf.parent, navs[0].get('href', ''))
+    if nav_path is None:
+        return
+    tree = etree.fromstring(nav_path.read_bytes(), parser)
+    tocs = tree.xpath('//*[local-name()="nav" and contains(concat(" ", @epub:type, " "), " toc ")]', namespaces={'epub': conv.EPUB_NS})
+    if len(tocs) != 1:
+        return
+    by_id = {e.get('id'): e for e in items}
+    spine = []
+    for ref in package.findall(f'{{{conv.OPF_NS}}}spine/{{{conv.OPF_NS}}}itemref'):
+        item = by_id.get(ref.get('idref'))
+        if item is not None and ref.get('linear') != 'no' and item.get('media-type') == 'application/xhtml+xml':
+            path = local(opf.parent, item.get('href', ''))
+            if path is not None:
+                spine.append(path)
+    if len(spine) != len(set(spine)):
+        return
+    links = {}
+    represented = set()
+    for anchor in tocs[0].iter(f'{{{conv.XHTML_NS}}}a'):
+        url = urlsplit(anchor.get('href', ''))
+        represented_path = local(nav_path.parent, url._replace(fragment='').geturl())
+        if represented_path is not None:
+            represented.add(represented_path)
+        path = local(nav_path.parent, anchor.get('href', ''))
+        if path is not None:
+            links.setdefault(path, []).append(anchor)
+    changed = False
+    for index, path in enumerate(spine[1:-1], 1):
+        if path in represented or len(links.get(spine[index - 1], [])) != 1 or len(links.get(spine[index + 1], [])) != 1:
+            continue
+        left, right = links[spine[index - 1]][0], links[spine[index + 1]][0]
+        a, c = ordinal(''.join(left.itertext()).strip()), ordinal(''.join(right.itertext()).strip())
+        li, next_li = left.getparent(), right.getparent()
+        if not a or not c or a[1] != c[1] or c[0] != a[0] + 2 or li.tag != f'{{{conv.XHTML_NS}}}li' or li.getnext() is not next_li or li.getparent().tag != f'{{{conv.XHTML_NS}}}ol':
+            continue
+        doc = etree.fromstring(path.read_bytes(), parser)
+        body = doc.find(f'{{{conv.XHTML_NS}}}body')
+        blocks = [] if body is None else [e for e in body.iter() if isinstance(e.tag, str) and etree.QName(e).localname in {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'} and ''.join(e.itertext()).strip()]
+        if not blocks:
+            continue
+        label = ''.join(blocks[0].itertext()).strip()
+        text = ''.join(body.itertext()).strip()
+        if len(label) > 120 or ordinal(label) != (a[0] + 1, a[1]) or not text.startswith(label) or not text[len(label):].strip():
+            continue
+        entry = etree.Element(f'{{{conv.XHTML_NS}}}li')
+        href = quote(posixpath.relpath(path.as_posix(), nav_path.parent.as_posix()), safe='/-._~')
+        etree.SubElement(entry, f'{{{conv.XHTML_NS}}}a', href=href).text = label
+        next_li.addprevious(entry)
+        changed = True
+    if changed:
+        nav_path.write_bytes(etree.tostring(tree, encoding='utf-8', xml_declaration=True))
 
 
 def repair_horizontal_spine_direction(root_dir: Path, opf_href: str) -> None:

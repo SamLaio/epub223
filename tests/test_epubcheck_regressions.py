@@ -2146,7 +2146,7 @@ def test_toc_target_html_extension_is_resolved_to_xhtml_spine_item():
     filtered = filter_toc_to_spine([node], ["OEBPS/Text/chapter.xhtml"])
 
     assert len(filtered) == 1
-    assert filtered[0].href == "OEBPS/Text/chapter.xhtml"
+    assert filtered[0].href == "OEBPS/Text/chapter.xhtml#p1"
 
 
 def test_guide_nav_document_is_dropped_when_not_in_final_spine():

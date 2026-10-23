@@ -87,15 +87,9 @@ def convert_chinese_in_package(root_dir: Path, mode: str | None) -> None:
 def convert_chinese_document(data: str, mode: str | None) -> str:
     if mode in {None, "", "none"}:
         return data
-    parser = etree.XMLParser(
-        remove_blank_text=False,
-        resolve_entities=False,
-        load_dtd=False,
-        no_network=True,
-        huge_tree=True,
-        recover=True,
-    )
-    root = etree.fromstring(data.encode("utf-8"), parser)
+    # 延後匯入以共用保文解析，同時避免 conversion 與 chinese 的循環初始化。
+    from .conversion import parse_xml_recovering
+    root = parse_xml_recovering(data)
     _convert_element_text(root, mode)
     return etree.tostring(root, encoding="unicode", xml_declaration=False)
 

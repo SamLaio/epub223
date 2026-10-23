@@ -83,8 +83,8 @@ testFile
 .history/
 
 tests/*
-!tests/test_kindle.py
-!tests/test_horizontal_spine.py
+!tests/test_*.py
+/*.epub
 conversation-summary.md
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).

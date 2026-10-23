@@ -109,13 +109,29 @@ def _extract_epub_archive(zf: zipfile.ZipFile, root: Path) -> None:
     names = [item.filename for item in files]
     if len(set(names)) != len(names):
         raise ValueError("EPUB ZIP 含重複資源名稱，無法安全決定引用目標")
+    canonical = {}
+    for name in names:
+        parts = name.split("/")
+        target = posixpath.normpath(name)
+        if name.startswith("/") or any(part in {"", "."} for part in parts) or target in {".", ".."} or target.startswith("../"):
+            raise ValueError("EPUB ZIP 含不安全路徑：" + name)
+        canonical[name] = target
+    changed_paths = {name for name in names if canonical[name] != name}
+    for name in changed_paths:
+        aliases = [other for other in names if canonical[other].casefold() == canonical[name].casefold()]
+        if len(aliases) > 1 and (
+            Path(canonical[name]).suffix.lower() not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+            or len({zf.read(other) for other in aliases}) != 1
+        ):
+            raise ValueError("EPUB ZIP 正規化後資源名稱衝突，無法安全決定引用目標")
     invalid = re.compile(r'[<>:"\\|?*\x00-\x1f]')
     device = re.compile(r'^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)', re.I)
     mapping: Dict[str, str] = {}
     used: set[str] = set()
-    reserved = {name.casefold() for name in names}
+    reserved = {canonical[name].casefold() for name in names}
     for index, item in enumerate(files):
-        name = item.filename
+        original = item.filename
+        name = canonical[original]
         parts = name.split("/")
         if name.startswith("/") or any(part in {"", ".", ".."} for part in parts):
             raise ValueError("EPUB ZIP 含不安全路徑：" + name)
@@ -135,6 +151,10 @@ def _extract_epub_archive(zf: zipfile.ZipFile, root: Path) -> None:
                     break
                 number += 1
             mapping[name] = target
+        if original != target:
+            mapping[original] = target
+            if original in changed_paths:
+                mapping[name] = target
         used.add(target.casefold())
         path = root / target
         path.resolve().relative_to(root.resolve())

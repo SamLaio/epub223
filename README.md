@@ -1,4 +1,20 @@
-# ePub223 1.7
+# ePub223 1.8
+
+完整「附：【本作品來自網際網路及出版圖書,本人不做任何負責】內容版權歸作者所有」可精確清除（支援繁簡）；引述、含錨點／連結或相鄰尾文的段落保留，不依「版權」等一般字詞刪文。
+
+EPUB2 的 NCX 轉 EPUB3 目錄時，spine 路徑核對與 NCX 重建均保留章內片段錨點；同檔案的不同小節不去重，只有完全相同目標才沿用去重。頁碼入口也保留片段；缺失錨點仍交由既有引用檢查，不以移除所有錨點掩蓋問題。依 [Calibre 目錄與連結檢查](https://manual.calibre-ebook.com/en/edit.html) 及 Sigil 保留有效導覽後驗證的原則處理，未移植第三方程式碼。
+
+正式目錄的章內錨點不會使同檔案的正文地標或頁碼入口被當成重複連結刪除；保留原有語意導覽與文字。精確清除完整「更多精彩熱門日本輕小說、動漫小說，輕小說文庫(http://www.wenku8.com) 為你一網打盡！」來源宣傳（含繁簡、HTTP/HTTPS及com/cn變體），保留引述、正文提及、署名、錨點／連結及尾文，不依網址關鍵字批次刪文。
+
+完整「請收藏本站：https://.bg60。筆趣閣手機版：https://m.bg60」來源頁尾可精確清除，支援繁簡與跨行內標籤；不刪正文引用、不完整句、其他網址或含錨點／連結的段落，並保留尾文。
+
+唯一正式 nav、且沒有 NCX 的 EPUB3，只在兩個同層相鄰目錄連號中間，補入 spine 已存在、首段明列正確章號且後面有正文的單一漏列章節。保留正文、原目錄層級及其他入口；缺檔、空章、跨層、章內錨點、非連號及非線性內容不猜補。沿用 [Calibre 目錄編輯](https://manual.calibre-ebook.com/edit.html#editing-the-table-of-contents) 的依實際章節建立入口、保留內容後重新驗證原則，未移植第三方程式碼。
+
+舊鳳鳴軒文字版只清除完整作品集標頭、完整字級／背景色選單及宣傳分隔行；錄入／校對署名、正文提及、引述與不完整片段保留，不依網站名稱批次刪正文。
+
+ZIP 資源名含包內父目錄段（如 `OEBPS/../cover.jpg`）時，僅在正規化後仍位於書籍根目錄時修復；跳出根目錄及內容衝突均在寫入前拒絕。只有位元組完全相同的點陣圖別名才可各自保留並安全改名，不覆寫或刪除圖片；文字／SVG 等資源衝突仍拒絕。
+
+僅清除已核實的兩種完整鞋款／名牌販售宣傳段落（NIKE、ADIDAS 通通1200及固定品牌串）；正文品牌提及、引述與錄入署名保留，不用品牌關鍵字批次刪文。
 
 OPF manifest 的 item 不接受 `width`／`height`；僅移除這兩個未加命名空間的非法屬性，保留圖片檔、引用、XHTML 上的合法尺寸與版面，不猜改圖片。
 
@@ -35,6 +51,7 @@ CSS 缺資源檢查同時處理外部樣式表、XHTML 內嵌 `style` 與行內�
 僅清理已確認的完整「最新電子書免費分享社群，群主 V 信 1107308023」括號導流標記；支援正簡文字與空白，保留前後正文、署名、引號內引用及其他群號，不依一般「分享社群」關鍵字刪除。
 
 完整星號包裹的 WenKu8.cn／WenKu8.com 網站標頭視為來源宣傳；普通文庫名稱、網址提及與正文引用保留。
+論壇網域同頁的完整「本文僅供個人學習交流使用」、「如需轉載請經過本人／翻譯本人同意」與「推薦使用『多看閱讀』」免責／宣傳可精確清除；無論壇網域、引述、含錨點／連結或相鄰尾文時保留，作者／譯者署名與後記不刪。
 
 「（Free書分享更多搜雅書）」僅匹配完整已核實導流括號；兼容正簡字及相鄰兩段的 PDF 拆行，不刪除圖說正文、一般引用或不完整片段。
 同樣只精確移除「（更d書f享搜索雅書.YabooK）」混淆字導流括號，不以一般站名提及刪正文。
@@ -134,7 +151,8 @@ python -m epub3itizer.kindle "原書.epub" "Kindle直排.epub" --keep-vertical -
 - 目錄頁修復會整理空 `<dd/>` 的舊式 `<dl>` 目錄、把官方 nav 檔中只有 `<div><ul>` 的普通目錄補成 EPUB3 需要的 `<nav epub:type="toc">`，並攤平製作器誤產生的單鏈巢狀 nav，讓章節維持可點擊且階層合理
 - 修復 SVG 圖像式目錄內遺失或重複資料夾的 `xlink:href` 章節連結，依實際 XHTML 檔案回寫為正確相對路徑
 - CSS 清理會移除重複屬性宣告，例如重複的 `font-weight`、`border-top`、`border-bottom`、`border-left`、`border-right`；同名屬性保留最後一次宣告，以符合 CSS cascade 語意並降低 Sigil 檢查書本警告
-- 修復流程會整理官方 `nav.xhtml`，例如把可能造成 `NAV-011` 閱讀順序警告的父層目錄連結降級為純文字；父層若指到晚於子項目的 spine 位置，會保留子章節連結並移除父層 href；同一檔案內 fragment 後的裸連結會被降級並由既有空 leaf 清理移除，保留可判定順序的子章節連結
+- XHTML 嚴格解析失敗時，先定位孤立或缺少的 `p` 邊界並嘗試嚴格重解析，避免 recover 截斷後續文字；原始文字、屬性、註解與外來命名空間不重序列化，簡轉繁沿用同一安全解析路徑。
+- 修復流程會整理官方 `nav.xhtml`；父層若與子項目具有相同目標且造成閱讀順序問題，可降級為純文字。僅指向相同 spine 檔案、但錨點不同的分組入口仍保留，不以檔案相同判定重複；同一檔案內 fragment 後的裸連結沿用既有清理，保留子章節連結。
 - OPF 清理會保留 manifest/spine 使用中的資源 id，並將 metadata 中撞名的 `id` 改成安全名稱，避免 EPUBCheck 回報 `Duplicate "title"` 等 XML id 衝突
 - OPF 清理會移除 0 位元組的 XHTML manifest/spine 項目及其失效目錄連結，避免 EPUBCheck `RSC-016` 的空文件解析錯誤
 - EPUB2 OPF 中緊接文字的 XML 註解（例如 `<!--accessibility options-->`）會正確略過，不會誤把後續 manifest／spine 包入 metadata。
@@ -284,7 +302,10 @@ java -jar "C:\PortableApps\[epub] epubCheck\epubcheck.jar" "D:\project\epub223\t
 - [calibre](https://github.com/kovidgoyal/calibre)：參考 Editor 的 Check book / auto-fix 思路。
 - [Sigil](https://github.com/Sigil-Ebook/Sigil)：參考 Mend / Mend and Prettify / Mend On Open 思路。
 - [rsking/epub-fixer](https://github.com/rsking/epub-fixer)
-- [innocenat/kindle-epub-fix](https://github.com/innocenat/kindle-epub-fix)
+- [innocenat/kindle-epub-fix](https://github.com/innocenat/kindle-epub-fix)：參考 UTF-8 宣告與 body ID 目錄連結修復。
+- [imanubdesigner/epub-kindle-fix](https://github.com/imanubdesigner/epub-kindle-fix)：另參考資源、MIME、XML 與連結檢查。
+- [dliedke/Kindle-EPUB-Fix](https://github.com/dliedke/Kindle-EPUB-Fix)：參考本機瀏覽器診斷、結構與資源檢查及 JSON 報告設計；列為參考，不代表已整合其全部修復。
+- [w3c/epubcheck](https://github.com/w3c/epubcheck)：作為轉換後的外部 EPUB 規範驗證工具；不是轉換必要依賴，也不能單獨判定 Kindle 轉換一定成功。
 - [amanvirparhar/gempress](https://github.com/amanvirparhar/gempress)
 - [Mimoja/MyBookLibrary](https://github.com/Mimoja/MyBookLibrary)
 - [dankatri/epub-fixer](https://github.com/dankatri/epub-fixer)
@@ -299,6 +320,17 @@ java -jar "C:\PortableApps\[epub] epubCheck\epubcheck.jar" "D:\project\epub223\t
 - [cerasnix/epub-ruby-fix-for-apple-books](https://github.com/cerasnix/epub-ruby-fix-for-apple-books)：參考 ruby / rt / rp 在 Apple Books 顯示與選取相容性問題。
 - [JoeCotellese/bookery](https://github.com/JoeCotellese/bookery)：參考 metadata-first 與非破壞式 EPUB metadata workflow。
 - [chayprabs/epub-validate-repair](https://github.com/chayprabs/epub-validate-repair)：參考 manifest、spine、TOC、metadata 與批次驗證修復流程。
+
+### Kindle 相容性處理界線
+
+一般轉換與 `--repair-only` 都會沿用 UTF-8 輸出、資源路徑與 manifest 修復，
+並將指向實際且唯一 `<body id="…">` 的本機連結改連到該頁面；正文、body ID、
+段落／註腳錨點保留。支援相對路徑、URL 編碼與同頁連結；外部 URL、含查詢參數、
+重複 ID、無法解析的 XML 與含 `xml:base` 或 HTML `<base>` 的文件不套用此規則。
+
+不照搬第三方的全部修復：不將未知語言猜成英文，也不為了消除錯誤直接刪除
+缺檔引用或不存在的段落錨點。這些規則只能處理已知問題；EPUBCheck 為外部規範驗證，
+Kindle 轉換仍須另以官方 Previewer 驗證，不能保證 Send-to-Kindle 接受。
 
 ## 與 Sigil plugin 版的差異
 
