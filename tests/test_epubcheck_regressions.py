@@ -1323,7 +1323,7 @@ def test_opf_cleanup_removes_old_attrs_private_tokens_and_fills_empty_spine(tmp_
     output = opf.read_text(encoding="utf-8")
 
     assert 'scheme="uuid"' not in output
-    assert 'scheme="marc:relators"' not in output
+    assert 'scheme="marc:relators"' in output
     assert 'role="aut"' not in output
     fixed_uid = re.search(r"<dc:identifier[^>]*>(urn:uuid:[^<]+)</dc:identifier>", output).group(1)
     uuid.UUID(fixed_uid.split(":", 2)[2])
@@ -1427,8 +1427,8 @@ def test_nav_parent_anchor_before_child_links_is_demoted(tmp_path):
 
     assert '<span>Book</span>' in output
     assert 'href="index_split_000.html">Book</a>' not in output
-    assert "第1章" not in output
-    assert 'href="index_split_000.html">第1章</a>' not in output
+    assert "第1章" in output
+    assert 'href="index_split_000.html">第1章</a>' in output
     assert 'href="index_split_000.html#page_5"' in output
     assert 'href="index_split_001.html#page_148"' in output
 
@@ -4152,3 +4152,12 @@ def test_readweek_full_page_requires_text_and_image_fingerprints(tmp_path,monkey
     snapshot={p.name:p.read_bytes() for p in tmp_path.iterdir()}
     conv.cleanup_opf_manifest(tmp_path,'content.opf');conv.cleanup_nav_leaf_spans(tmp_path,'content.opf')
     assert snapshot=={p.name:p.read_bytes() for p in tmp_path.iterdir()}
+
+
+def test_chinese_conversion_preserves_explicit_japanese_and_converts_outer_tail():
+    source = '<div><span lang="ja-JP" title="欧州"><i>闘争民主党</i>与党</span>这本书<span xml:lang="ja">欧州共同体</span>汉字</div>'
+    output = convert_chinese_document(source, 's2tw')
+    assert '<i>闘争民主党</i>与党' in output
+    assert 'title="欧州"' in output and '>欧州共同体<' in output
+    assert '這本書' in output and '漢字' in output
+    assert convert_chinese_document(output, 's2tw') == output

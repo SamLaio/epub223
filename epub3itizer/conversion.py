@@ -60,6 +60,7 @@ CALIBRE_BOOKMARKS = {"meta-inf/calibre_bookmarks.txt"}
 PRIVATE_RESIDUE_FILENAMES = {"provider.txt"}
 # 人工逐張確認的純網站宣傳圖；檔名、站名或一般漫畫圖片不作判斷依據。
 KNOWN_PROMOTIONAL_IMAGE_SHA256 = {
+    "2668f1cbea3d25969bed79d4b4ec08c606c878513632305b19d096320a4c057c",  # 鏡文學延伸閱讀純QR碼
     "ab274662baf612f8a6794791fbd847af98808a60f39622da182d07d50dbe9e18",  # 滿屋書香純導流圖片
     "65371dd5bedfb6295665c2b2d52d0dc1bfff038734ed8e446cd7bcf3d6242fdd",
     "cef0217bfcd76756642941eb395a4a3cd3c87afd5bdd66eea8e47f8d2b8fe8b0",
@@ -118,6 +119,7 @@ PHRASING_PARENT_ELEMENTS = {
 BLOCK_TO_INLINE_ELEMENTS = {"address", "article", "aside", "blockquote", "div", "dl", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "li", "nav", "ol", "p", "section", "table", "ul"}
 XHTML_TAG_RENAMES = {
     "case": "div",
+    "cc": "span",
     "chmetcnv": "span",
     "chsdate": "span",
     "debagame": "div",
@@ -971,6 +973,8 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
             if normalized_local == local and re.fullmatch(r"[a-z]_{2,}", local.lower()):
                 normalized_local = "span"
             if normalized_local != local:
+                if local.lower() == "cc":
+                    elem.set("class", " ".join(dict.fromkeys([*elem.get("class", "").split(), "epub223-cc"])))
                 elem.tag = f"{{{XHTML_NS}}}{normalized_local}"
                 local = normalized_local
                 renamed_from_fake_tag = True
@@ -1348,6 +1352,37 @@ SOURCE_AD_INLINE_PATTERNS = [
 
 
 def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
+    # 只清理緊接 END 的末尾純錄入組署名，正文提及及正式製作資訊保留。
+    for body in root.xpath("//*[local-name()='body']"):
+        nodes = list(body)
+        if len(nodes) < 2:
+            continue
+        credit, ending = nodes[-1], nodes[-2]
+        if all(isinstance(n.tag, str) and etree.QName(n).localname == 'p' and not (set(n.attrib) - {'class'}) and not len(n) for n in (credit, ending)) and (ending.text or '').strip() == 'END' and (credit.text or '').strip() in {'兔子家族製作', '兔子家族制作'} and not (credit.tail or '').strip() and not (ending.tail or '').strip():
+            body.remove(credit)
+    # 完整框線與已知錄入組標頭同時存在才清理；正式署名及後記保留。
+    for body in root.xpath("//*[local-name()='body']"):
+        nodes = list(body)[:22]
+        text = lambda n: re.sub(r'\s+', '', ''.join(n.itertext())) if isinstance(n.tag, str) else ''
+        headers = {'台版轉自輕之國度', '輕之國度錄入組錄入', '輕之國度×天使動漫錄入組'}
+        for index, opening in enumerate(nodes[:-1]):
+            border = text(opening)
+            if not re.fullmatch(r'─{8,}|≡{8,}', border) or text(nodes[index + 1]) not in headers:
+                continue
+            end = next((j for j in range(index + 2, len(nodes)) if text(nodes[j]) == border), None)
+            if end is None:
+                continue
+            block = nodes[index:end + 1]
+            if any(not isinstance(n.tag, str) or etree.QName(n).localname != 'p' or len(n) or n.attrib or (n.tail or '').strip() for n in block):
+                continue
+            values = [text(n) for n in block[2:-1]]
+            known = r'(?:作者|插畫|譯者|圖源|錄入|修圖|掃圖)：[^「」『』]+|(?:輕之國度|天使動漫)：(?:https?://)?www\.(?:lightnovel\.(?:cn|fun)|tsdm39\.com)|僅供個人學習交流使用，禁作商業用途|下載後請在24小時內刪除，(?:輕之國度|LK與TSDM)不負擔任何責任|請尊重翻譯、掃圖、錄入、校對的辛勤勞動(?:，轉載請保留信息)?|轉載請保留完整的資訊，否則往後一律禁止'
+            if not all(re.fullmatch(known, value) for value in values) or not any(value.startswith('作者：') for value in values) or not any('www.lightnovel.' in value for value in values):
+                continue
+            for node in block:
+                if not re.match(r'^(?:作者|插畫|譯者)：', text(node)):
+                    body.remove(node)
+            break
     # 只清除首頁完整框線內的已核實群號宣傳，任何正文／錨點混入即保留。
     for body in root.xpath("//*[local-name()='body']"):
         nodes = list(body)[:11]
@@ -1456,6 +1491,13 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
     forum_credit_page = bool(re.search(r"(?:lightnovel\.(?:cn|fun|app|life)|sosg\.net|tsdm\d*\.(?:com|net)|yidm\.com)", "".join(root.itertext()), re.IGNORECASE))
     for elem in list(root.xpath(".//x:p | .//x:div | .//x:span", namespaces=ns)):
         text = "".join(elem.itertext()).strip()
+        if elem.tag == f"{{{XHTML_NS}}}p" and len(elem) == 0 and re.sub(r'\s+', '', text) in {
+            '原版未篡改内容请移至#官!网。如已在，请，关闭广告拦截功能并且退出浏览器阅读模式',
+            '原版未篡改內容請移至#官!網。如已在，請，關閉廣告攔截功能並且退出瀏覽器閱讀模式',
+        } and not any(e.get('id') or e.get('href') for e in (*elem.iter(), *elem.iterancestors())):
+            elem.text = ''
+            append_text_in_place_of_element(elem, '')
+            continue
         if elem.tag == f"{{{XHTML_NS}}}p" and re.fullmatch(
             r"附[：:]【本作品[來来]自[網网](?:際網路|络)及出版[圖图][書书][,，]本人不做任何[負负][責责]】[內内]容版[權权][歸归]作者所有",
             re.sub(r'\s+', '', text),
@@ -1903,7 +1945,48 @@ def normalize_ncx_play_order(src_path: Path) -> None:
         )
 
 
+def preserve_custom_cc_css(data: str) -> str:
+    """替合法 span 補原 cc 型別選擇器的別名，不碰宣告值或外部命名空間。"""
+    if not re.search(r"\bcc\b", data, re.I):
+        return data
+    import tinycss2
+    changed = False
+
+    def selectors(tokens):
+        nonlocal changed
+        result = []
+        significant = [i for i, token in enumerate(tokens) if token.type not in {"whitespace", "comment"}]
+        for i, token in enumerate(tokens):
+            if token.type == "function" and token.lower_name in {"is", "not", "where", "has"}:
+                token.arguments = selectors(token.arguments)
+            previous = next((tokens[j] for j in reversed(significant) if j < i), None)
+            following = next((tokens[j] for j in significant if j > i), None)
+            if token.type == "ident" and token.value.lower() == "cc" and not (
+                previous is not None and previous.type == "literal" and previous.value in {".", "|", ":"}
+                or following is not None and following.type == "literal" and following.value == "|"
+            ):
+                result.extend(tinycss2.parse_component_value_list("span.epub223-cc"))
+                changed = True
+            else:
+                result.append(token)
+        return result
+
+    def rules(nodes):
+        for node in nodes:
+            if node.type == "qualified-rule":
+                node.prelude = selectors(node.prelude)
+            elif node.type == "at-rule" and node.lower_at_keyword in {"media", "supports", "layer", "container"} and node.content is not None:
+                nested = tinycss2.parse_rule_list(node.content)
+                rules(nested)
+                node.content = tinycss2.parse_component_value_list(tinycss2.serialize(nested))
+
+    parsed = tinycss2.parse_stylesheet(data)
+    rules(parsed)
+    return tinycss2.serialize(parsed) if changed else data
+
+
 def sanitize_css(data: str) -> str:
+    data = preserve_custom_cc_css(data)
     data = "".join(ch for ch in data if ch in "\t\r\n" or ord(ch) >= 0x20)
     data = data.replace("％", "%")
     data = data.replace("：", ":")
@@ -2435,6 +2518,7 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
     )
     fixed_items: List[str] = []
     manifest_hrefs_by_id: Dict[str, str] = {}
+    spine_ids = {item.get("idref") for item in opf_root.xpath(".//*[local-name()='spine']/*[local-name()='itemref']")}
     for item in opf_root.xpath(".//*[local-name()='manifest']/*[local-name()='item']"):
         href = item.get("href", "")
         if not href or item.get("media-type") != "application/xhtml+xml":
@@ -2443,7 +2527,7 @@ def add_fixed_layout_viewports(root_dir: Path, opf_href: str) -> None:
         if item_id:
             manifest_hrefs_by_id[item_id] = href
         properties = item.get("properties", "").split()
-        if has_global_fixed_layout or "rendition:layout-pre-paginated" in properties or "layout-pre-paginated" in properties:
+        if (has_global_fixed_layout and item_id in spine_ids) or "rendition:layout-pre-paginated" in properties or "layout-pre-paginated" in properties:
             fixed_items.append(posixpath.normpath(posixpath.join(opf_dir, unquote(href))))
     for itemref in opf_root.xpath(".//*[local-name()='spine']/*[local-name()='itemref']"):
         properties = itemref.get("properties", "").split()
@@ -2807,6 +2891,45 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
         target = posixpath.normpath(posixpath.join(nav_dir, unquote(base)))
         return spine_order.get(target)
 
+    # 全目錄失去連結時，只在所有標題皆有唯一且同閱讀順序的正文標題才重建。
+    missing = root.xpath(".//*[local-name()='nav'][@epub:type='toc']//*[local-name()='a']", namespaces={'epub': EPUB_NS})
+    if len(missing) >= 2 and all(not a.get('href') for a in missing):
+        headings = {}
+        documents = {}
+        for href in spine_href_list:
+            if href == nav_rel:
+                continue
+            path = root_dir / Path(href)
+            if not path.is_file():
+                continue
+            doc = parse_xml_recovering(read_text_file(path))
+            documents[href] = doc
+            for index, node in enumerate(doc.xpath("//*[local-name()='h1' or local-name()='h2' or local-name()='h3' or local-name()='h4' or local-name()='h5' or local-name()='h6']")):
+                label = ''.join(''.join(node.itertext()).split())
+                headings.setdefault(label, []).append((int(etree.QName(node).localname[1]), spine_order[href], index, href, node))
+        plan = []
+        for anchor in missing:
+            matches = headings.get(''.join(''.join(anchor.itertext()).split()), [])
+            best = [m for m in matches if m[0] == min(x[0] for x in matches)] if matches else []
+            if len(best) != 1:
+                break
+            plan.append((anchor, best[0]))
+        positions = [(m[1], m[2]) for _, m in plan]
+        if len(plan) == len(missing) and positions == sorted(set(positions)):
+            dirty = set()
+            for number, (anchor, (_, _, _, href, heading)) in enumerate(plan, 1):
+                if not heading.get('id'):
+                    ids = set(documents[href].xpath('//@id'))
+                    value = f'recovered-toc-{number}'
+                    while value in ids:
+                        value += '-x'
+                    heading.set('id', value)
+                    dirty.add(href)
+                anchor.set('href', posixpath.relpath(href, start=nav_dir) + '#' + heading.get('id'))
+            for href in dirty:
+                write_text_file(root_dir / Path(href), etree.tostring(documents[href], encoding='utf-8', xml_declaration=True).decode('utf-8'))
+            changed = True
+
     if spine_hrefs:
         for anchor in list(root.xpath(".//*[local-name()='nav']//*[local-name()='a'][@href]")):
             base, _frag = split_href(anchor.get("href", ""))
@@ -2859,27 +2982,7 @@ def cleanup_nav_leaf_spans(root_dir: Path, opf_href: str) -> None:
                 direct_anchor.attrib.pop("href", None)
                 direct_anchor.tag = f"{{{XHTML_NS}}}span"
                 changed = True
-        seen_fragment_for_spine: set[str] = set()
-        for anchor in list(root.xpath(".//*[local-name()='nav']//*[local-name()='a'][@href]")):
-            if not any(isinstance(nav.tag, str) and etree.QName(nav).localname == 'nav'
-                       and 'toc' in nav.get('{%s}type' % EPUB_NS, nav.get('type', '')).split()
-                       for nav in anchor.iterancestors()):
-                continue  # 章內目錄與正文地標／頁碼是獨立入口，不跨導覽去重。
-            href = anchor.get("href", "")
-            base, frag = split_href(href)
-            parts = urlsplit(base)
-            if parts.scheme or parts.netloc or not base:
-                continue
-            target = posixpath.normpath(posixpath.join(nav_dir, unquote(base)))
-            if target not in spine_order:
-                continue
-            if not frag and target in seen_fragment_for_spine:
-                anchor.attrib.pop("href", None)
-                anchor.tag = f"{{{XHTML_NS}}}span"
-                changed = True
-                continue
-            if frag:
-                seen_fragment_for_spine.add(target)
+        # 整章入口與章內片段是不同目標；不能因同檔先出現片段而刪除整章葉節點。
         for nav in root.xpath(".//*[local-name()='nav']"):
             epub_type = " ".join(
                 part for part in (nav.get("{%s}type" % EPUB_NS, ""), nav.get("type", "")) if part
@@ -3047,6 +3150,16 @@ def manifest_media_type_for_path(path: Path, href: str) -> str:
     detected = media_type_for_path(path)
     if detected.startswith("image/") or detected == "application/pdf":
         return detected
+    if not path.suffix and detected == "application/octet-stream":
+        try:
+            import tinycss2
+            text = path.read_text(encoding="utf-8-sig")
+            if "\x00" not in text and re.match(r'\s*@charset\s+["\']utf-8["\']\s*;', text, re.I):
+                rules = tinycss2.parse_stylesheet(text, skip_comments=True, skip_whitespace=True)
+                if any(rule.type == "qualified-rule" for rule in rules) and not any(rule.type == "error" for rule in rules):
+                    return "text/css"
+        except (OSError, UnicodeError):
+            pass
     return extension_media_type(href) or detected
 
 
@@ -3136,7 +3249,7 @@ def is_invalid_raster_image_resource(path: Path) -> bool:
 PRIVATE_OPF_PROPERTY_TOKENS = {"duokan-page-fitwindow", "duokan-page-fullscreen", "layout-blank"}
 PRIVATE_OPF_META_PROPERTIES = {"hdf"}
 KNOWN_OPF_PROPERTY_PREFIXES = {"calibre", "dcterms", "media", "rendition"}
-OPF_META_ALLOWED_ATTRS = {"content", "dir", "id", "name", "property", "refines", "xml:lang"}
+OPF_META_ALLOWED_ATTRS = {"content", "dir", "id", "name", "property", "refines", "scheme", "xml:lang"}
 
 
 def clean_opf_property_tokens(value: str) -> List[str]:
@@ -3211,8 +3324,6 @@ def remove_known_image_only_promotions(root_dir: Path, opf_dir: str, manifest: e
         and hashlib.sha256(path.read_bytes()).hexdigest() in KNOWN_PROMOTIONAL_IMAGE_SHA256
         and path.resolve() not in protected
     }
-    if not known:
-        return False
     documents = {}
     removed = set()
     suffix_changed = False
@@ -3228,10 +3339,35 @@ def remove_known_image_only_promotions(root_dir: Path, opf_dir: str, manifest: e
         if not bodies or path.resolve() in protected:
             continue
         body = bodies[0]
+        text = ''.join(''.join(body.itertext()).split())
+        if hashlib.sha256(text.encode('utf-8')).hexdigest() in {'b1eb4ed9b5acc890803f0763e7b3bc6d32840d7369f647fc2b1fe0e7f9b2428b', '9051f21d01e54dbecdfa6fedea26b834f219cf0cac6de74bace0700c0b9aab8e'} and all(
+            isinstance(e.tag, str) and etree.QName(e).localname in {'body', 'div', 'h1', 'p', 'br', 'b'} and not e.get('id') for e in body.iter()
+        ):
+            removed.add(path.resolve())
+            continue
+        for paragraph in list(body.xpath(".//*[local-name()='p']")):
+            if ''.join(paragraph.itertext()).strip() != '更多精彩內容，歡迎上鏡文學官網繼續閱讀。':
+                continue
+            elems = list(paragraph.iter())
+            images = paragraph.xpath(".//*[local-name()='img']")
+            links = paragraph.xpath(".//*[local-name()='a']/@href")
+            if not images or not all(re.fullmatch(r'https://mirrorfiction\.com/zh-Hant/book/\d+', href) for href in links):
+                continue
+            if any(not isinstance(e.tag, str) or etree.QName(e).localname not in {'p', 'a', 'span', 'img'} or e.get('id') for e in elems) or (paragraph.tail or '').strip():
+                continue
+            if any(local_target(path, e.get('src', '')) not in known for e in images):
+                continue
+            paragraph.getparent().remove(paragraph)
+            path.write_bytes(etree.tostring(doc, encoding='utf-8', xml_declaration=True))
+            suffix_changed = True
         for first in list(body):
+            if not isinstance(first.tag, str):
+                continue
             if ''.join(first.itertext()).strip() != '如果你不知道讀什麼書，':
                 continue
             suffix = list(body)[list(body).index(first):]
+            if any(not isinstance(e.tag, str) for e in suffix):
+                continue
             suffix_text = ''.join(''.join(e.itertext()) + (e.tail or '') for e in suffix)
             fingerprint = hashlib.sha256(''.join(suffix_text.split()).encode('utf-8')).hexdigest()
             if fingerprint not in KNOWN_PROMOTIONAL_SUFFIX_TEXT_SHA256:
@@ -3876,9 +4012,6 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             if attr_local not in OPF_META_ALLOWED_ATTRS and attr != "{http://www.w3.org/XML/1998/namespace}lang":
                 meta.attrib.pop(attr, None)
                 changed = True
-        if meta.get("scheme") is not None:
-            meta.attrib.pop("scheme", None)
-            changed = True
     used_xml_ids = {item_id for item_id in manifest_ids if item_id}
     metadata_id_renames: Dict[str, str] = {}
     for elem in metadata.xpath(".//*[@id]"):
@@ -3936,7 +4069,8 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
             metadata.remove(meta)
             changed = True
             continue
-        if refines.startswith("#") and refines[1:] not in metadata_ids:
+        media_item_ref = prop == "media:duration" and any(item.get("id") == refines.lstrip("#") for item in manifest_items())
+        if refines.startswith("#") and refines[1:] not in metadata_ids and not media_item_ref:
             metadata.remove(meta)
             changed = True
             continue

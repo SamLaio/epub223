@@ -37,6 +37,74 @@ def repair_epub_contents(root_dir: Path, opf_href: str) -> None:
     repair_horizontal_spine_direction(root_dir, opf_href)
     repair_missing_numbered_nav_entry(root_dir, opf_href)
     repair_body_fragment_links(root_dir)
+    repair_media_overlays(root_dir, opf_href)
+
+
+def repair_media_overlays(root_dir: Path, opf_href: str) -> None:
+    """依既有 SMIL 補齊 MIME 與缺少時長，保留音訊、同步點及正文。"""
+    from decimal import Decimal
+    import re
+    from urllib.parse import unquote, urlsplit
+    from lxml import etree
+
+    def seconds(value):
+        if value is None:
+            raise ValueError("SMIL 缺少 clipEnd，無法安全推算同步朗讀時長")
+        if re.fullmatch(r"\d+(?:\.\d+)?(?:h|min|s|ms)?", value):
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)(h|min|s|ms)?", value)
+            return Decimal(match[1]) * {None: 1, 'h': 3600, 'min': 60, 's': 1, 'ms': Decimal('.001')}[match[2]]
+        if re.fullmatch(r"(?:\d+:)?[0-5]?\d:[0-5]?\d(?:\.\d+)?", value):
+            result = Decimal(0)
+            for part in value.split(':'):
+                result = result * 60 + Decimal(part)
+            return result
+        raise ValueError(f"無法安全解析 SMIL 時間：{value}")
+
+    opf = root_dir / opf_href
+    package = etree.fromstring(opf.read_bytes())
+    ns = f'{{{conv.OPF_NS}}}'
+    items = {i.get('id'): i for i in package.findall(f'{ns}manifest/{ns}item')}
+    overlay_ids = dict.fromkeys(i.get('media-overlay') for i in items.values() if i.get('media-overlay'))
+    if not overlay_ids:
+        return
+    metadata = package.find(f'{ns}metadata')
+    durations = {m.get('refines'): m for m in metadata.findall(f'{ns}meta') if m.get('property') == 'media:duration'}
+    total = Decimal(0)
+    for identifier in overlay_ids:
+        item = items.get(identifier)
+        if item is None:
+            raise ValueError(f"同步朗讀指向不存在的 manifest ID：{identifier}")
+        url = urlsplit(item.get('href', ''))
+        if url.scheme or url.netloc:
+            raise ValueError("同步朗讀必須是包內 SMIL")
+        path = (opf.parent / unquote(url.path)).resolve()
+        path.relative_to(root_dir.resolve())
+        smil = etree.fromstring(path.read_bytes())
+        if smil.tag != '{http://www.w3.org/ns/SMIL}smil':
+            raise ValueError(f"同步朗讀文件不是 SMIL：{item.get('href')}")
+        item.set('media-type', 'application/smil+xml')
+        refinement = '#' + identifier
+        if refinement not in durations:
+            audio = smil.findall('.//{http://www.w3.org/ns/SMIL}audio')
+            if not audio:
+                raise ValueError("SMIL 沒有音訊片段，無法安全推算時長")
+            duration = Decimal(0)
+            for clip in audio:
+                length = seconds(clip.get('clipEnd')) - seconds(clip.get('clipBegin', '0'))
+                if length < 0:
+                    raise ValueError("SMIL clipEnd 早於 clipBegin")
+                duration += length
+            elem = etree.SubElement(metadata, f'{ns}meta', property='media:duration', refines=refinement)
+            elem.text = f'{duration:f}s'
+            durations[refinement] = elem
+        total += seconds(durations[refinement].text)
+    if None not in durations:
+        durations[None] = etree.SubElement(metadata, f'{ns}meta', property='media:duration')
+    if not durations[None].text or seconds(durations[None].text) != total:
+        durations[None].text = f'{total:f}s'
+    data = etree.tostring(package, encoding='utf-8', xml_declaration=True)
+    if opf.read_bytes() != data:
+        opf.write_bytes(data)
 
 
 

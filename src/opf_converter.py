@@ -206,6 +206,9 @@ class Opf_Converter(object):
                 continue
 
             if "metadata" in prefix and tname == "meta":
+                if tattr.get("property", "").startswith("media:"):
+                    res.append(taginfo_toxml([tname, tattr, tcontent]))
+                    continue
                 # collect info from basic meta name value pairs if present
                 # handle calibre: specific metadata
                 if tattr.get("name","") == "calibre:series":

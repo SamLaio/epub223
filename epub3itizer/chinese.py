@@ -105,7 +105,7 @@ def _convert_element_text(root: etree._Element, mode: str) -> None:
         if not isinstance(elem.tag, str):
             continue
         local = etree.QName(elem).localname.lower()
-        skip = elem.get('translate', '').lower() == 'no' or local in SKIP_TEXT_ELEMENTS or _has_skip_ancestor(elem)
+        skip = elem.get('translate', '').lower() == 'no' or (elem.get('{http://www.w3.org/XML/1998/namespace}lang') or elem.get('lang', '')).lower().split('-')[0] == 'ja' or local in SKIP_TEXT_ELEMENTS or _has_skip_ancestor(elem)
         if elem.text and not skip:
             elem.text = _convert_simplified_field(elem.text, mode)
         if elem.tail and not _parent_is_skip(elem):
@@ -128,7 +128,7 @@ def _convert_simplified_field(text: str, mode: str) -> str:
 def _has_skip_ancestor(elem: etree._Element) -> bool:
     parent = elem.getparent()
     while parent is not None:
-        if isinstance(parent.tag, str) and (etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS or parent.get('translate', '').lower() == 'no'):
+        if isinstance(parent.tag, str) and (etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS or parent.get('translate', '').lower() == 'no' or (parent.get('{http://www.w3.org/XML/1998/namespace}lang') or parent.get('lang', '')).lower().split('-')[0] == 'ja'):
             return True
         parent = parent.getparent()
     return False
@@ -139,5 +139,5 @@ def _parent_is_skip(elem: etree._Element) -> bool:
     return bool(
         parent is not None
         and isinstance(parent.tag, str)
-        and (etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS or parent.get('translate', '').lower() == 'no' or _has_skip_ancestor(parent))
+        and (etree.QName(parent).localname.lower() in SKIP_TEXT_ELEMENTS or parent.get('translate', '').lower() == 'no' or (parent.get('{http://www.w3.org/XML/1998/namespace}lang') or parent.get('lang', '')).lower().split('-')[0] == 'ja' or _has_skip_ancestor(parent))
     )
