@@ -1491,6 +1491,22 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
     forum_credit_page = bool(re.search(r"(?:lightnovel\.(?:cn|fun|app|life)|sosg\.net|tsdm\d*\.(?:com|net)|yidm\.com)", "".join(root.itertext()), re.IGNORECASE))
     for elem in list(root.xpath(".//x:p | .//x:div | .//x:span", namespaces=ns)):
         text = "".join(elem.itertext()).strip()
+        # 完整空廣告標記或已核實站台宣傳才清理；引用、錨點及未知變體保留。
+        if (elem.tag == f"{{{XHTML_NS}}}p" and not len(elem)
+                and not (set(elem.attrib) - {'class'})
+                and not any(e.get('id') or e.get('href') or etree.QName(e).localname in {'pre', 'code', 'samp', 'kbd', 'blockquote', 'q'} for e in elem.iterancestors())):
+            pitches = {
+                '爱下电子书Txt版阅读,下载和分享更多电子书请访问，简体:https://ixdzs8.com,繁体:https://ixdzs8.tw,E-mail:support@ixdzs.com',
+                '愛下電子書Txt版閱讀,下載和分享更多電子書請訪問，簡體:https://ixdzs8.com,繁體:https://ixdzs8.tw,E-mail:support@ixdzs.com',
+                '欢迎关注公众号“丹青拾字”',
+                '歡迎關注公眾號「丹青拾字」',
+            }
+            if text == '<divclass="contentadv">' or text in pitches:
+                if text in pitches and (elem.tail or '').strip() in {'------章节内容开始-------', '------章節內容開始-------'}:
+                    elem.tail = ''
+                elem.text = ''
+                append_text_in_place_of_element(elem, '')
+                continue
         if elem.tag == f"{{{XHTML_NS}}}p" and len(elem) == 0 and re.sub(r'\s+', '', text) in {
             '原版未篡改内容请移至#官!网。如已在，请，关闭广告拦截功能并且退出浏览器阅读模式',
             '原版未篡改內容請移至#官!網。如已在，請，關閉廣告攔截功能並且退出瀏覽器閱讀模式',
