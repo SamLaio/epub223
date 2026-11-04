@@ -11,7 +11,7 @@ def test_nonpromotional_document_preserves_body_comment(tmp_path):
  before=path.read_bytes();assert c.remove_known_image_only_promotions(tmp_path,'',manifest,set()) is False
  assert path.read_bytes()==before
 
-@pytest.mark.parametrize('credit', [CREDIT, '製作人員我準備把同事埋在公司後面，有什麼想問的嗎？臺版轉自天使動漫論壇輕書架×天使動漫錄入組圖源：Miku雪蘭錄入：十六夜小夜最後更新：2026-10-29'])
+@pytest.mark.parametrize('credit', [CREDIT, '製作人員我準備把同事埋在公司後面，有什麼想問的嗎？臺版轉自天使動漫論壇輕書架×天使動漫錄入組圖源：Miku雪蘭錄入：十六夜小夜最後更新：2026-10-29'] + [f'製作人員臺版轉自深夜讀書會發佈：深夜讀書會論壇：ritdon.com最後更新：{date}' for date in ('2026-07-24', '2026-08-24', '2026-08-20')])
 @pytest.mark.parametrize('extra', ['', '<p>作者後記，這是正文。</p>', '<img src="unknown.jpg"/>', '<p id="note"/>'])
 def test_credit_requires_entire_safe_document(tmp_path, extra, credit):
  path=tmp_path/'credits.xhtml';path.write_text(f'<html xmlns="{c.XHTML_NS}"><body><div><h1><b>{credit}</b></h1>{extra}</div></body></html>',encoding='utf-8')

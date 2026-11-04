@@ -10,7 +10,70 @@ from .compat import EpubBookAdapter
 __all__ = [
     "repair_epub",
     "repair_epub_contents",
+    "restore_verified_chapter_headings",
 ]
+
+
+def restore_verified_chapter_headings(root_dir: Path, headings: dict[str, str], toc_paths: list[str]) -> None:
+    """依人工核對的完整文字恢復章標，並在指定 XHTML 目錄補入錨點。"""
+    import copy
+    import hashlib
+    import posixpath
+    import re
+    from urllib.parse import unquote, urlsplit
+    from lxml import etree
+
+    root_dir = root_dir.resolve()
+    documents = {}
+
+    def document(relative):
+        path = (root_dir / relative).resolve()
+        if not path.is_relative_to(root_dir) or path == root_dir:
+            raise ValueError('章標修復路徑超出工作目錄')
+        if path not in documents:
+            documents[path] = etree.parse(str(path), etree.XMLParser(resolve_entities=False, no_network=True))
+        return documents[path]
+
+    for relative, original in headings.items():
+        match = re.fullmatch(r'(第[零〇一二三四五六七八九十百千兩两0-9]+)\s+(.{1,100})', original)
+        if not match:
+            raise ValueError('須提供缺少章字的完整已核對章標')
+        label = f'{match[1]}章 {match[2]}'
+        doc = document(relative)
+        matches = doc.xpath('//*[local-name()="p" and normalize-space(.)=$label]', label=original)
+        if len(matches) != 1 or len(matches[0]) or set(matches[0].attrib) - {'class'}:
+            raise ValueError(f'章標不唯一、已修復或含錨點：{relative}')
+        node = matches[0]
+        following = node.getnext()
+        if following is None or not ''.join(following.itertext()).strip():
+            raise ValueError(f'章標後無正文：{relative}')
+        anchor_id = 'restored-chapter-' + hashlib.sha256(original.encode('utf-8')).hexdigest()[:12]
+        if doc.xpath('//*[@id=$value]', value=anchor_id):
+            raise ValueError('章標錨點重複')
+        node.tag = f'{{{conv.XHTML_NS}}}h2'
+        node.set('id', anchor_id)
+        node.text = label
+        for toc_relative in toc_paths:
+            toc = document(toc_relative)
+            anchors = []
+            for a in toc.xpath('//*[local-name()="a"][@href]'):
+                url = urlsplit(a.get('href'))
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(toc_relative), unquote(url.path)))
+                if not url.scheme and not url.netloc and not url.fragment and target == relative:
+                    anchors.append(a)
+            if len(anchors) != 1 or etree.QName(anchors[0].getparent()).localname != 'li':
+                raise ValueError(f'目錄入口不唯一：{toc_relative} / {relative}')
+            old = anchors[0]
+            entry = copy.deepcopy(old.getparent())
+            if len(entry) != 1 or entry[0].get('id') or entry.get('id'):
+                raise ValueError('目錄項目含複雜結構或既有錨點')
+            entry[0].clear()
+            entry[0].set('href', old.get('href') + '#' + anchor_id)
+            entry[0].text = label
+            old.getparent().addnext(entry)
+    # 完整計畫通過才開始寫入；呼叫端仍須於工作副本執行並重跑格式驗證。
+    for path, doc in documents.items():
+        path.write_bytes(etree.tostring(doc, encoding='utf-8', xml_declaration=True))
 
 
 def repair_epub_contents(root_dir: Path, opf_href: str) -> None:

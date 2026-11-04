@@ -1352,6 +1352,54 @@ SOURCE_AD_INLINE_PATTERNS = [
 
 
 def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
+    # 已核實的完整站台／App 指紋；只刪宣傳文字，保留嵌在同段的前後正文。
+    inline_pitches = (
+        r'【鳳\/凰\/ 更新快 無彈窗 請搜尋f/h/xiao/shuo/c/o/m】', '新八一中文網首發',
+        '天才3秒記住本站網址【筆迷閣 .】', 'ァ新ヤ~⑧~1~中文網ωωω.χ~⒏~1zщ.còм',
+        '新81中文網更新最快 手機端：://', '新81中文網更新最快 電腦端:/',
+    )
+    exact_pitches = {
+        '看無防盜裡面更新速度快、廣告少、章節完整、破防盜',
+        'Ps:書友們，我是聖騎士的傳說，推薦一款免費App，支援下載、聽書、零廣告、多種閱讀模式。請您關注（）書友們快關注起來吧！',
+        'https:///book_22963/l',
+        '天才一秒記住本站地址：.。頂點筆趣閣手機版閱讀網址：m.',
+        '天才一秒記住本站地址：.。手機版閱讀網址：m.',
+        '天才一秒記住本站地址：.手機版閱讀網址：m.',
+        '天才一秒記住本站地址：。手機版閱讀網址：',
+        '先給自己定個小目標：比如收藏筆趣閣：. 手機版網址：m.',
+        '佰度搜尋 噺八壹中文網 м. 無廣告詞',
+        '噺⑧壹中文網щщщ.x^8^1`z^òм 無廣告`更新`最快新八一中文`小`説`網',
+        '噺⑧壹中文網ωωω.χ⒏òм 哽噺繓赽捌㈠小説蛧',
+        '老鐵先定個小目標^記住新八一中文網  м.',
+        '更新最快(的新八一中文網  (м.ō)m',
+        '關注更新請訪問:http://www.ixdzs.com/d/153/153676/',
+        '手機訪問:http://m.ixdzs.com/d/153676',
+        '天才本站地址：.。手機版閱讀網址：m.',
+        '天才本站地址：。手機版閱讀網址：',
+        '請記住本書首發域名：。手機版閱讀網址：',
+        '請記住本書首發域名：.。手機版更新最快網址：m.',
+        '本書來自 品書網 https:百度搜尋品.書,網更新最快的站！',
+        '書客居閱讀網址：', '閱讀網址：m.', '閱讀網址：',
+        '。樂文手機版更新最快網址：13', '手機版更新最快網址：7',
+    }
+    for elem in list(root.xpath("//*[local-name()='p']")):
+        if len(elem) or set(elem.attrib) - {'class'} or any(
+            e.get('id') or e.get('href') or etree.QName(e).localname in {'pre', 'code', 'samp', 'kbd', 'blockquote', 'q'}
+            for e in elem.iterancestors()
+        ):
+            continue
+        text = elem.text or ''
+        if text.strip() in exact_pitches or (
+            text.strip() == '手機閱讀'
+            and '本書來自 品書網 https:百度搜尋品.書,網更新最快的站！' in ''.join(root.itertext())
+        ):
+            elem.text = ''
+            append_text_in_place_of_element(elem, '')
+        else:
+            for pitch in inline_pitches:
+                text = text.replace(pitch, '')
+            text = re.sub(r'(?: \.更新最快|頂點更新最快|(?<=[。！？])品書網)$', '', text)
+            elem.text = text
     # 只清理緊接 END 的末尾純錄入組署名，正文提及及正式製作資訊保留。
     for body in root.xpath("//*[local-name()='body']"):
         nodes = list(body)
@@ -1572,6 +1620,17 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
 
 
 def remove_known_inline_source_ads(root: etree._Element) -> None:
+    # 使用者參考正文已核實的完整頁尾指紋；只移除段尾導流及其殘留尾碼。
+    pitch = '{記住本站網址，，方便下次閱讀，或且百度輸入「52」，就能進入本站}8'
+    for paragraph in root.xpath("//*[local-name()='p']"):
+        if len(paragraph) or set(paragraph.attrib) - {'class'} or any(
+            e.get('id') or e.get('href') or etree.QName(e).localname in {'pre', 'code', 'blockquote', 'q'}
+            for e in paragraph.iterancestors()
+        ):
+            continue
+        value = paragraph.text or ''
+        if value.endswith(pitch):
+            paragraph.text = value[:-len(pitch)]
     # PDF 轉檔可能把已核實的完整導流括號拆成相鄰兩段；只清除這一種完整組合。
     for paragraph in root.xpath("//*[local-name()='p']"):
         following = paragraph.getnext()
@@ -3356,7 +3415,13 @@ def remove_known_image_only_promotions(root_dir: Path, opf_dir: str, manifest: e
             continue
         body = bodies[0]
         text = ''.join(''.join(body.itertext()).split())
-        if hashlib.sha256(text.encode('utf-8')).hexdigest() in {'b1eb4ed9b5acc890803f0763e7b3bc6d32840d7369f647fc2b1fe0e7f9b2428b', '9051f21d01e54dbecdfa6fedea26b834f219cf0cac6de74bace0700c0b9aab8e'} and all(
+        if hashlib.sha256(text.encode('utf-8')).hexdigest() in {
+            'b1eb4ed9b5acc890803f0763e7b3bc6d32840d7369f647fc2b1fe0e7f9b2428b',
+            '9051f21d01e54dbecdfa6fedea26b834f219cf0cac6de74bace0700c0b9aab8e',
+            '4ee6df92f4a75649e5aca5c1a5df93419469dd67a60529970daab49fddb3fc41',
+            'ff8b35fc0cfe67d1f228e6d9c3a37e0564ff60541c255c64423214372d1d0c33',
+            '91f0cc19620a3707694c8af443953224b9f0545be604aa38b8d40b5057b38869',
+        } and all(
             isinstance(e.tag, str) and etree.QName(e).localname in {'body', 'div', 'h1', 'p', 'br', 'b'} and not e.get('id') for e in body.iter()
         ):
             removed.add(path.resolve())

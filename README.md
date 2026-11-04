@@ -4,7 +4,7 @@
 
 適合已有 EPUB、需要轉換格式或修正結構的使用者。TXT 建書請用 ezPub；CSS 專項檢查可接續使用 epubCssFixer。
 
-目前版本：**1.9**。版本異動見 [CHANGELOG](CHANGELOG.md)。
+目前版本：**1.10**。版本異動見 [CHANGELOG](CHANGELOG.md)。
 
 ## 安裝與快速開始
 

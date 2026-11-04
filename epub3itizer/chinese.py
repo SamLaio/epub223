@@ -101,28 +101,44 @@ def _iter_text_files(root_dir: Path) -> Iterable[Path]:
 
 
 def _convert_element_text(root: etree._Element, mode: str) -> None:
+    def simplified_source(elem):
+        for node in (elem, *elem.iterancestors()):
+            language = node.get('{http://www.w3.org/XML/1998/namespace}lang') or node.get('lang')
+            if language:
+                return language.lower().replace('_', '-') in {'zh-hans', 'zh-cn', 'zh-sg'}
+        return False
+
     for elem in root.iter():
         if not isinstance(elem.tag, str):
             continue
         local = etree.QName(elem).localname.lower()
         skip = elem.get('translate', '').lower() == 'no' or (elem.get('{http://www.w3.org/XML/1998/namespace}lang') or elem.get('lang', '')).lower().split('-')[0] == 'ja' or local in SKIP_TEXT_ELEMENTS or _has_skip_ancestor(elem)
         if elem.text and not skip:
-            elem.text = _convert_simplified_field(elem.text, mode)
+            elem.text = _convert_simplified_field(elem.text, mode, simplified_source(elem))
         if elem.tail and not _parent_is_skip(elem):
-            elem.tail = _convert_simplified_field(elem.tail, mode)
+            elem.tail = _convert_simplified_field(elem.tail, mode, simplified_source(elem.getparent()) if elem.getparent() is not None else False)
         for attr in list(elem.attrib):
             attr_local = etree.QName(attr).localname.lower() if attr.startswith("{") else attr.lower()
             if attr_local in TEXT_ATTRS and not skip:
-                elem.set(attr, _convert_simplified_field(elem.attrib[attr], mode))
+                elem.set(attr, _convert_simplified_field(elem.attrib[attr], mode, simplified_source(elem)))
+    # 轉換後更新明確來源語言，避免重跑時再次強制轉換正體文字。
+    for elem in root.iter():
+        if not isinstance(elem.tag, str):
+            continue
+        if etree.QName(elem).localname.lower() in SKIP_TEXT_ELEMENTS or elem.get('translate', '').lower() == 'no' or _has_skip_ancestor(elem):
+            continue
+        for attr in ('lang', '{http://www.w3.org/XML/1998/namespace}lang'):
+            if elem.get(attr, '').lower().replace('_', '-') in {'zh-hans', 'zh-cn', 'zh-sg'}:
+                elem.set(attr, 'zh-Hant')
 
 
-def _convert_simplified_field(text: str, mode: str) -> str:
+def _convert_simplified_field(text: str, mode: str, force: bool = False) -> str:
     # 只選有明確簡體字的可讀欄位；詞彙／標點仍唯一由 zhTranslate 處理。
     parts = re.split(r'(「[^「」]*[\u3040-\u30ff][^「」]*」|〈[^〈〉]*[\u3040-\u30ff][^〈〉]*〉|《[^《》]*[\u3040-\u30ff][^《》]*》|（[^（）]*[\u3040-\u30ff][^（）]*）|\([^()]*[\u3040-\u30ff][^()]*\))', text)
     if simplified_pattern is None:
         raise RuntimeError("簡轉正失敗：缺少共享字形偵測")
     pattern = simplified_pattern(True)
-    return ''.join(part if i % 2 or not pattern.search(part) else convert_chinese_text(part, mode) for i, part in enumerate(parts))
+    return ''.join(part if i % 2 or not (force or pattern.search(part)) else convert_chinese_text(part, mode) for i, part in enumerate(parts))
 
 
 def _has_skip_ancestor(elem: etree._Element) -> bool:
