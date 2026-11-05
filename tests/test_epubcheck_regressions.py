@@ -3294,7 +3294,8 @@ def test_css_truncated_data_url_declaration_is_removed():
 
 def test_css_unbalanced_and_orphan_braces_are_repaired():
     assert sanitize_css("}") == ""
-    assert sanitize_css("@font-face { src: url(a.ttf); }\n}") == ""
+    font = '@font-face { font-family: "Embedded"; src: url(a.ttf); }'
+    assert sanitize_css(font + "\n}").strip() == font
     output = sanitize_css(".zzvu {\n\tmargin-left: 30%; text-indent: 0; ")
     assert output.rstrip().endswith("}")
 

@@ -4,7 +4,7 @@
 
 適合已有 EPUB、需要轉換格式或修正結構的使用者。TXT 建書請用 ezPub；CSS 專項檢查可接續使用 epubCssFixer。
 
-目前版本：**1.10**。版本異動見 [CHANGELOG](CHANGELOG.md)。
+目前版本：**1.11**。版本異動見 [CHANGELOG](CHANGELOG.md)。
 
 ## 安裝與快速開始
 
@@ -50,6 +50,8 @@ python -m epub3itizer --repair-only ".\books" --recursive --output-dir ".\books_
 ## 驗證輸出
 
 工具成功輸出不等於 EPUB 規範或閱讀器驗收通過。建議依序檢查 CSS、執行外部 EPUBCheck，再回讀目錄、註腳、圖片及正文。
+
+修復保留包內嵌入字型的 `@font-face` 與內文／標題的字型連結；最終驗證仍須確認 CSS 指向實際存在的字型資源，詳見[修復範圍](docs/repair.md)。
 
 ```powershell
 java -jar "C:\path\to\epubcheck.jar" ".\output.epub"

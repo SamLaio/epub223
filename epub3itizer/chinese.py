@@ -8,16 +8,17 @@ from typing import Iterable
 from lxml import etree
 
 try:
-    from s2tw_converter import Converter as ZhTranslateConverter, simplified_pattern
+    from s2tw_converter import Converter as ZhTranslateConverter, simplified_pattern, normalize_quotes
 except Exception:  # pragma: no cover - local integration fallback
     zhtranslate_src = Path(r"D:\github\zhTranslate\src")
     if zhtranslate_src.exists() and str(zhtranslate_src) not in sys.path:
         sys.path.insert(0, str(zhtranslate_src))
     try:
-        from s2tw_converter import Converter as ZhTranslateConverter, simplified_pattern
+        from s2tw_converter import Converter as ZhTranslateConverter, simplified_pattern, normalize_quotes
     except Exception:
         ZhTranslateConverter = None
         simplified_pattern = None
+        normalize_quotes = None
 
 TEXT_SUFFIXES = {".html", ".htm", ".xhtml", ".opf", ".ncx", ".xml"}
 TEXT_ATTRS = {
@@ -28,7 +29,7 @@ TEXT_ATTRS = {
     "placeholder",
     "title",
 }
-SKIP_TEXT_ELEMENTS = {"script", "style"}
+SKIP_TEXT_ELEMENTS = {"script", "style", "pre", "code", "samp", "kbd"}
 
 _converter = None
 
@@ -133,12 +134,12 @@ def _convert_element_text(root: etree._Element, mode: str) -> None:
 
 
 def _convert_simplified_field(text: str, mode: str, force: bool = False) -> str:
-    # 只選有明確簡體字的可讀欄位；詞彙／標點仍唯一由 zhTranslate 處理。
+    # 字詞僅轉明確簡體欄位；引號由共享 zhTranslate 獨立整理。
     parts = re.split(r'(「[^「」]*[\u3040-\u30ff][^「」]*」|〈[^〈〉]*[\u3040-\u30ff][^〈〉]*〉|《[^《》]*[\u3040-\u30ff][^《》]*》|（[^（）]*[\u3040-\u30ff][^（）]*）|\([^()]*[\u3040-\u30ff][^()]*\))', text)
-    if simplified_pattern is None:
+    if simplified_pattern is None or normalize_quotes is None:
         raise RuntimeError("簡轉正失敗：缺少共享字形偵測")
     pattern = simplified_pattern(True)
-    return ''.join(part if i % 2 or not (force or pattern.search(part)) else convert_chinese_text(part, mode) for i, part in enumerate(parts))
+    return ''.join(part if i % 2 else convert_chinese_text(part, mode) if force or pattern.search(part) else normalize_quotes(part) for i, part in enumerate(parts))
 
 
 def _has_skip_ancestor(elem: etree._Element) -> bool:

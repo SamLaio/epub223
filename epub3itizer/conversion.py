@@ -2062,6 +2062,13 @@ def preserve_custom_cc_css(data: str) -> str:
 
 def sanitize_css(data: str) -> str:
     data = preserve_custom_cc_css(data)
+    # 僅清除已知外部／裝置字型規則；包內字型的家族與資源連結必須保留。
+    data = re.sub(
+        r"@font-face\s*\{[^{}]*\}",
+        lambda m: "" if re.search(r"url\(\s*['\"]?(?:file:|res:/|https?://)", m.group(), re.I) else m.group(),
+        data,
+        flags=re.IGNORECASE,
+    )
     data = "".join(ch for ch in data if ch in "\t\r\n" or ord(ch) >= 0x20)
     data = data.replace("％", "%")
     data = data.replace("：", ":")
@@ -2099,12 +2106,6 @@ def sanitize_css(data: str) -> str:
     data = re.sub(r"(?m)^\s*[-\w]+\s*:\s*;", "", data)
     data = re.sub(r"(?im)^\s*[-\w]+\s*:\s*url\(\s*(['\"]?)data:[^\n)]*$", "", data)
     data = re.sub(r"url\(\s*(['\"]?)https?://[^)'\"]+\1\s*\)", "none", data, flags=re.IGNORECASE)
-    data = re.sub(
-        r"@font-face\s*\{.*?\}",
-        "",
-        data,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
     if "{" not in data:
         data = re.sub(r"(?m)^\s*}\s*$", "", data)
     data = re.sub(r"url\(\s*(['\"]?)(?:file:|res:/)[^)]+\)", "none", data, flags=re.IGNORECASE)

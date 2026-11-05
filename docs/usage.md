@@ -37,6 +37,8 @@ python -m epub3itizer --repair-only ".\input.epub" -o ".\repaired.epub" --conver
 
 已確認為正體的出版文字不要為了批次方便而重轉。輸出後仍需核對人名、專有名詞與歧義詞。
 
+引號整理需搭配 zhTranslate 0.1.11 或更新版本。啟用 `--convert-chinese s2tw` 時，引號透過 zhTranslate 的獨立整理 API 處理，不要求節點含簡體字；純標點 `“？”`、`“……”` 與已正體中文對話也會轉換，而原有正體字詞不重轉。`pre`／`code`／`samp`／`kbd`、script/style、日文與 `translate="no"` 保留；屬性分隔符及 href/src/id 不改。半形直引號不跨行或跨 XML 節點猜配。
+
 來源元素或其最近語言宣告明確為 `zh-Hans`、`zh-CN` 或 `zh-SG` 時，`s2tw` 會一併處理「此后」「一帘」等沒有其他明確簡體字的短句，並將該語言宣告改為 `zh-Hant`。未宣告簡體的文字維持保守偵測；巢狀正體語言、日文及 `translate="no"` 的保護仍生效。只有人工確認來源確為簡體時，才可在本機工作副本補上簡體語言宣告，不得用於已正體或來源不明的混合段落。
 
 ## Kindle 直排相容副本
