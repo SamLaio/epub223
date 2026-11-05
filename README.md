@@ -8,7 +8,7 @@
 
 ## 安裝與快速開始
 
-在專案根目錄準備 Python 與 `lxml`：
+使用Python 3.10以上，在專案根目錄準備 `lxml`：
 
 ```powershell
 python -m pip install lxml
@@ -17,6 +17,8 @@ python -m epub3itizer ".\input.epub" -o ".\output.epub"
 
 不需要開啟 Sigil。`python convert_epub3.py` 是相容舊入口；以下統一使用模組入口。
 
+BMP轉PNG及固定版面圖片尺寸修復另需選用套件 `Pillow`：`python -m pip install Pillow`。簡轉正與引號整理需zhTranslate 0.1.11以上；Kindle入口另需 `tinycss2`，安裝方式見[進階使用](docs/usage.md)。
+
 已有 EPUB3，只想修復結構：
 
 ```powershell
@@ -24,6 +26,8 @@ python -m epub3itizer --repair-only ".\input.epub" -o ".\repaired.epub"
 ```
 
 請讓輸入與輸出使用不同路徑。保留原檔，在驗證輸出後再決定是否替換。
+
+一般單檔入口會覆寫指定的既有輸出，不需 `--overwrite`；該選項只控制資料夾批次的覆寫行為。請自行準備備份，不要把輸出指向原檔。
 
 ## 選擇處理模式
 
