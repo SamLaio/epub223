@@ -4,6 +4,8 @@
 
 ## 一般入口
 
+轉換及修復會移除包內任何目錄的 `calibre_bookmarks.txt`（不分大小寫），以及對應 OPF／spine 殘留引用；未列在 manifest 的同名檔案也會清除。一般正文或名稱不同的附錄不因含「書籤」二字而刪除。
+
 從專案根目錄執行 `python -m epub3itizer --help` 查看完整參數，`--version` 查看版本。
 
 | 參數 | 說明 |
@@ -23,7 +25,13 @@
 
 批次結束碼 `0` 表示這次處理沒有失敗項，`1` 表示有失敗項或執行錯誤。預設略過既有輸出，略過不代表重新驗證；`--overwrite` 才會覆蓋批次輸出。請閱讀逐本錯誤，不要只確認輸出資料夾存在就視為全部成功。
 
+正式目錄頁原已列於 spine，且存在包內指向該頁的連結時，修復保留其閱讀順序；包含目錄頁內隱藏 landmarks 指回自身的目錄連結。這可避免移除 spine 頁面後，又因地標目標不在閱讀順序而刪掉原有效連結。未被引用的正式目錄仍可退出 spine；原不在 spine 的目錄不會因此自動加入。
+
+landmarks 中有效的同頁錨點（例如 `#toc`）會補上目前檔名，成為 `nav.xhtml#toc`，保留導覽文字及目標；錨點不存在時仍移除失效連結。一般正文的有效同頁錨點維持原樣。
+
 ## 簡體轉臺灣正體
+
+若只補漏轉引號，可使用 `python -m epub3itizer --repair-only input.epub -o quotes.epub --normalize-quotes`。此模式沿用相同可讀節點與保護區域，但不執行OpenCC、詞彙替換或改寫語言標記；不能同時傳入 `--convert-chinese`。它仍執行所選的EPUB結構修復，輸出須另行驗證。Python整合可使用 `convert_chinese_document(xml, "quotes")`。
 
 先將 [zhTranslate](https://github.com/SamLaio/zhTranslate) 安裝到同一 Python 環境：
 

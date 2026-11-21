@@ -1,5 +1,20 @@
 from lxml import etree as E
 from epub3itizer.chinese import convert_chinese_document
+from epub3itizer.cli import parse_args
+import pytest
+
+
+def test_quote_only_mode_preserves_simplified_words_and_language():
+    source = '<html lang="zh-Hans"><body><p>他说：“？” 此后。</p><p>皇后帶回祕密。</p><p lang="ja">“国会”</p><code>"中文"</code></body></html>'
+    output = convert_chinese_document(source, 'quotes')
+    root = E.fromstring(output)
+    assert root.get('lang') == 'zh-Hans'
+    assert root.xpath('//p/text()') == ['他说：「？」 此后。','皇后帶回祕密。','“国会”']
+    assert root.find('.//code').text == '"中文"'
+    assert convert_chinese_document(output, 'quotes') == output
+    assert parse_args(['a.epub','--normalize-quotes']).normalize_quotes
+    with pytest.raises(SystemExit):
+        parse_args(['a.epub','--normalize-quotes','--convert-chinese','s2tw'])
 
 
 def test_quotes_do_not_require_simplified_characters():

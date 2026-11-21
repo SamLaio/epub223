@@ -29,3 +29,12 @@ def test_reader_recommendation_without_forum_context_is_not_removed():
     before=etree.tostring(root)
     remove_known_source_ad_paragraphs(root)
     assert etree.tostring(root)==before
+
+
+def test_exact_forum_footer_variants_keep_story_and_credits():
+    pitches=['下載後請在24小時內刪除','禁止SF轉載','如需轉載請聯系本人','轉載時，請注明以上信息','轉載時，請註明以上信息，尊重翻譯者的辛勤勞動。']
+    root=etree.fromstring(('<html xmlns="http://www.w3.org/1999/xhtml"><body><p>http://www.lightnovel.cn</p><p>翻譯：chenyongsquall</p>'+''.join('<p>'+s+'</p>' for s in pitches)+'<p>正文：'+pitches[0]+'</p><blockquote><p>'+pitches[1]+'</p></blockquote></body></html>').encode())
+    remove_known_source_ad_paragraphs(root)
+    text=''.join(root.itertext())
+    assert '翻譯：chenyongsquall' in text and '正文：'+pitches[0] in text and pitches[1] in text
+    assert all(s not in text for s in pitches[2:])

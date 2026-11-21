@@ -2607,7 +2607,8 @@ def test_ncx_relative_targets_are_resolved_from_ncx_folder(tmp_path):
     assert nodes[0].href == "OEBPS/Text/a.xhtml"
 
 
-def test_landmarks_self_fragment_href_is_removed(tmp_path):
+@pytest.mark.parametrize("fragment", ["toc", "missing"])
+def test_landmarks_self_fragment_preserves_only_existing_target(tmp_path, fragment):
     (tmp_path / "OEBPS" / "Text").mkdir(parents=True)
     page = tmp_path / "OEBPS" / "Text" / "nav.xhtml"
     page.write_text(
@@ -2618,9 +2619,14 @@ def test_landmarks_self_fragment_href_is_removed(tmp_path):
         encoding="utf-8",
     )
 
+    page.write_text(page.read_text(encoding="utf-8").replace('href="#toc"', f'href="#{fragment}"'), encoding="utf-8")
+
     repair_missing_xhtml_references(tmp_path)
 
     assert 'href="#toc"' not in page.read_text(encoding="utf-8")
+    doc = etree.fromstring(page.read_bytes())
+    assert doc.xpath('//*[local-name()="a"]/@href') == (["nav.xhtml#toc"] if fragment == "toc" else [])
+    assert "TOC" in "".join(doc.itertext())
 
 
 def test_existing_referenced_files_are_added_to_manifest(tmp_path):

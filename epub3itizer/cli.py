@@ -80,18 +80,22 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--suffix", help="Suffix added before .epub in batch mode")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files")
     parser.add_argument("--repair-only", action="store_true", help="Only run the reusable EPUB repair pipeline")
-    parser.add_argument(
+    text_mode = parser.add_mutually_exclusive_group()
+    text_mode.add_argument(
         "--convert-chinese",
         choices=("none", "s2tw"),
         default="none",
         help="Optionally convert readable EPUB text from Simplified Chinese to Taiwan Traditional Chinese",
     )
+    text_mode.add_argument("--normalize-quotes", action="store_true", help="只整理可讀文字引號，不轉換字詞或語言標記")
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     _configure_text_streams()
     args = parse_args(argv)
+    if args.normalize_quotes:
+        args.convert_chinese = "quotes"
     input_path = Path(args.input)
     suffix = args.suffix or ("_repaired" if args.repair_only else "_epub3")
     processor = repair_epub if args.repair_only else convert_epub2_to_epub3

@@ -1,6 +1,30 @@
 import pytest
 from lxml import etree
-from epub3itizer.conversion import cleanup_nav_leaf_spans, remove_known_source_ad_paragraphs, XHTML_NS
+from epub3itizer.conversion import cleanup_nav_leaf_spans, cleanup_opf_manifest, repair_missing_xhtml_references, remove_known_source_ad_paragraphs, XHTML_NS
+
+
+@pytest.mark.parametrize('linked', [True, False])
+@pytest.mark.parametrize('href', ['nav.xhtml', '#toc'])
+def test_original_spine_nav_preserved_when_linked(tmp_path, linked, href):
+    (tmp_path/'content.opf').write_text('''<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>
+<item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>
+<item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+</manifest><spine><itemref idref="nav"/><itemref idref="chapter"/></spine></package>''',encoding='utf-8')
+    landmark = f'<nav epub:type="landmarks" hidden="hidden"><ol><li><a epub:type="toc" href="{href}">目錄</a></li></ol></nav>' if linked else ''
+    nav = f'<html xmlns="{XHTML_NS}" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目錄</title></head><body><nav epub:type="toc" id="toc"><ol><li><a href="chapter.xhtml">正文</a></li></ol></nav>{landmark}</body></html>'
+    (tmp_path/'nav.xhtml').write_text(nav,encoding='utf-8')
+    (tmp_path/'chapter.xhtml').write_text(f'<html xmlns="{XHTML_NS}"><head><title>正文</title></head><body><p>正文</p></body></html>',encoding='utf-8')
+    repair_missing_xhtml_references(tmp_path)
+    prior_nav=etree.fromstring(nav.encode('utf-8'))
+    cleanup_opf_manifest(tmp_path,'content.opf')
+    root=etree.parse(str(tmp_path/'content.opf'))
+    assert root.xpath('//*[local-name()="spine"]/*/@idref') == (['nav','chapter'] if linked else ['chapter'])
+    current_nav=etree.parse(str(tmp_path/'nav.xhtml'))
+    assert ''.join(prior_nav.itertext()) == ''.join(current_nav.getroot().itertext())
+    if linked:assert current_nav.xpath('//*[local-name()="a" and @epub:type="toc"]/@href', namespaces={'epub':'http://www.idpf.org/2007/ops'}) == (['nav.xhtml#toc'] if href=='#toc' else ['nav.xhtml'])
+    prior=(tmp_path/'content.opf').read_bytes()
+    cleanup_opf_manifest(tmp_path,'content.opf')
+    assert (tmp_path/'content.opf').read_bytes() == prior
 
 
 def test_toc_fragment_does_not_remove_landmark_or_page_list(tmp_path):

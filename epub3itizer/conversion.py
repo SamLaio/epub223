@@ -57,7 +57,7 @@ HTML5_HTTP_EQUIV = {
 HTML5_DIMENSION_ELEMENTS = {"canvas", "embed", "iframe", "img", "input", "object", "source", "video"}
 JAVASCRIPT_MEDIA_TYPES = {"application/javascript", "application/ecmascript", "text/javascript", "text/ecmascript"}
 CALIBRE_BOOKMARKS = {"meta-inf/calibre_bookmarks.txt"}
-PRIVATE_RESIDUE_FILENAMES = {"provider.txt"}
+PRIVATE_RESIDUE_FILENAMES = {"provider.txt", "calibre_bookmarks.txt"}
 # 人工逐張確認的純網站宣傳圖；檔名、站名或一般漫畫圖片不作判斷依據。
 KNOWN_PROMOTIONAL_IMAGE_SHA256 = {
     "2668f1cbea3d25969bed79d4b4ec08c606c878513632305b19d096320a4c057c",  # 鏡文學延伸閱讀純QR碼
@@ -1227,6 +1227,8 @@ def normalize_epubcheck_xhtml(root: etree._Element, book_href: str = "") -> None
                 attr_lower == local or (not elem.attrib[attr].strip() and attr_lower in HTML_TAG_NAME_ATTR_RESIDUES)
             ):
                 del elem.attrib[attr]
+            elif namespace == XHTML_NS and attr == "shizuku666":
+                del elem.attrib[attr]
             elif attr_lower.startswith("data-amznremoved"):
                 del elem.attrib[attr]
             elif namespace == XHTML_NS and attr_lower.startswith("v-"):
@@ -1352,6 +1354,33 @@ SOURCE_AD_INLINE_PATTERNS = [
 
 
 def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
+    # 群名與完整群號同頁才移除已核實的導流句，保留翻譯署名及正文提及。
+    page_text = re.sub(r'\s+', '', ''.join(root.itertext())).replace('衆', '眾').replace('爲', '為')
+    if '眾籌吃土教導院' in page_text and '630368941' in page_text:
+        pitches = {
+            'QQ群630368941', '眾籌QQ群630368941', 'QQ群（漢化支持方式）630368941',
+            '轉載請注明出處，眾籌不易請珍惜。', '轉載請註明出處，眾籌不易請珍惜。',
+            '本翻譯為眾籌付費翻譯。請喜歡的朋友入群支持翻譯',
+            '本翻譯為眾籌付費翻譯。請喜歡的朋友入群支持翻譯持續進行。',
+            '本漢化為真愛眾籌翻譯。請大家珍惜。',
+            '僅供個人學習交流使用，禁作商業用途。', '僅供個人學習交流使用，禁作商業用途',
+            '下載後請在24小時內刪除，翻譯組不負擔任何責任。',
+            '轉載時，請注明以上信息，尊重翻譯者的辛勤勞動。',
+            '轉載時，請註明以上信息，尊重翻譯者的辛勤勞動。',
+        }
+        for elem in list(root.xpath("//*[local-name()='p']")):
+            text = re.sub(r'\s+', '', ''.join(elem.itertext())).replace('衆', '眾').replace('爲', '為')
+            notice = re.fullmatch(r'(?:另外)?因為10卷下內容較為特殊所以到時候網絡發布版均為刪減版。完全版盡在群內有限放出請大家知曉謝謝', text)
+            if (text not in pitches and not notice) or any(
+                not isinstance(e.tag, str) or etree.QName(e).localname not in {'p', 'span', 'br'} or e.get('id') or e.get('href')
+                for e in elem.iter()
+            ) or any(etree.QName(e).localname in {'blockquote', 'q', 'pre', 'code'} or e.get('id') or e.get('href') for e in elem.iterancestors()):
+                continue
+            elem.clear(keep_tail=True)
+            if notice:
+                elem.text = text.split('。', 1)[0] + '。'
+            else:
+                append_text_in_place_of_element(elem, '')
     # 已核實的完整站台／App 指紋；只刪宣傳文字，保留嵌在同段的前後正文。
     inline_pitches = (
         r'【鳳\/凰\/ 更新快 無彈窗 請搜尋f/h/xiao/shuo/c/o/m】', '新八一中文網首發',
@@ -1415,20 +1444,20 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
         headers = {'台版轉自輕之國度', '輕之國度錄入組錄入', '輕之國度×天使動漫錄入組'}
         for index, opening in enumerate(nodes[:-1]):
             border = text(opening)
-            if not re.fullmatch(r'─{8,}|≡{8,}', border) or text(nodes[index + 1]) not in headers:
+            if not re.fullmatch(r'─{8,}|≡{8,}|—{8,}', border) or text(nodes[index + 1]) not in headers:
                 continue
-            end = next((j for j in range(index + 2, len(nodes)) if text(nodes[j]) == border), None)
+            end = next((j for j in range(index + 2, len(nodes)) if text(nodes[j]) == border or border.startswith('—') and re.fullmatch(r'—{8,}', text(nodes[j]))), None)
             if end is None:
                 continue
             block = nodes[index:end + 1]
             if any(not isinstance(n.tag, str) or etree.QName(n).localname != 'p' or len(n) or n.attrib or (n.tail or '').strip() for n in block):
                 continue
             values = [text(n) for n in block[2:-1]]
-            known = r'(?:作者|插畫|譯者|圖源|錄入|修圖|掃圖)：[^「」『』]+|(?:輕之國度|天使動漫)：(?:https?://)?www\.(?:lightnovel\.(?:cn|fun)|tsdm39\.com)|僅供個人學習交流使用，禁作商業用途|下載後請在24小時內刪除，(?:輕之國度|LK與TSDM)不負擔任何責任|請尊重翻譯、掃圖、錄入、校對的辛勤勞動(?:，轉載請保留信息)?|轉載請保留完整的資訊，否則往後一律禁止'
+            known = r'(?:作者|插畫|插圖|譯者|圖源|錄入|修圖|掃圖)：[^「」『』]+|(?:輕之國度|天使動漫)：(?:https?://)?www\.(?:lightnovel\.(?:cn|fun)|tsdm39\.com)|僅供個人學習交流使用，禁作商業用途|下載後請在24小時內刪除，(?:輕之國度|LK(?:與TSDM)?)不負擔任何責任|請尊重翻譯、掃圖[、。]錄入、校對的辛勤勞動(?:，轉載請保留信息)?|轉載請保留完整的資訊，否則往後一律禁止|www\.lightnovel\.cn'
             if not all(re.fullmatch(known, value) for value in values) or not any(value.startswith('作者：') for value in values) or not any('www.lightnovel.' in value for value in values):
                 continue
             for node in block:
-                if not re.match(r'^(?:作者|插畫|譯者)：', text(node)):
+                if not re.match(r'^(?:作者|插畫|插圖|譯者)：', text(node)):
                     body.remove(node)
             break
     # 只清除首頁完整框線內的已核實群號宣傳，任何正文／錨點混入即保留。
@@ -1503,6 +1532,13 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
             if "www.ireadweek.com" in compact and compact.endswith(("如果打不開，可以qq聯繫我", "如果打不开，可以qq联系我")):
                 return True
         if re.fullmatch(
+            r"本[書书]由[『']?行行[』']?整理[，,]如果你不知道[讀读]什[麼么][書书]或者想[獲获]得更多免[費费][電电]子[書书][請请]加小[編编]微信或QQ[：:]491256034"
+            r"小[編编]也和[結结]交一些喜[歡欢][讀读][書书]的朋友或者[關关]注小[編编][個个]人微信公[眾众][號号]id[：:]d716-716"
+            r"[為为]了方便[書书]友朋友找[書书]和看[書书][，,]小[編编]自己做了一[個个][電电]子[書书]下[載载][網网]站[，,][網网]址[：:]www\.ireadweek\.comQQ群[：:]550338315",
+            compact,
+        ):
+            return True
+        if re.fullmatch(
             r"本[書书]由[『']?行行[』']?整理[，,]如果你不知道[讀读]什[麼么][書书]或者想[獲获]得更多[免][費费][電电]子[書书][請请]加小[編编]微信或QQ[：:]2338856113"
             r"小[編编]也和[結结]交一些喜[歡欢][讀读][書书]的朋友或者[關关]注小[編编][個个]人微信公[眾众][號号]名[稱称][：:]幸福的味道id[：:]d716-716"
             r"[為为]了方便[書书]友朋友找[書书]和看[書书][，,]小[編编]自己做了一[個个][電电]子[書书]下[載载][網网]站[，,][網网]站的名[稱称][為为][：:]周[讀读][網网]址[：:]http://www\.ireadweek\.com",
@@ -1570,9 +1606,13 @@ def remove_known_source_ad_paragraphs(root: etree._Element) -> None:
             continue
         # 同頁論壇網域加完整文字指紋；署名、引用、錨點及相鄰尾文保留。
         if forum_credit_page and elem.tag == f"{{{XHTML_NS}}}p" and re.fullmatch(
-            r"(?:本文僅供個人學習交流使用，禁作商業用途|如需轉載請經過(?:翻譯)?本人同意(?:並保留所有信息)?|推薦使用『多看閱讀』)",
+            r"(?:本文僅供個人學習交流使用，禁作商業用途|如需轉載請經過(?:翻譯)?本人同意(?:並保留所有信息)?|推薦使用『多看閱讀』"
+            r"|下載後請在24小時內刪除|禁止SF轉載|如需轉載請聯[系繫]本人"
+            r"|轉載時，請[注註]明以上信息(?:，尊重翻譯者的辛勤勞動。)?)",
             re.sub(r'\s+', '', text),
-        ) and not any(e.get('id') or e.get('href') for e in elem.iter()) and not (elem.tail or '').strip():
+        ) and not any(e.get('id') or e.get('href') for e in elem.iter()) and not (elem.tail or '').strip() and not any(
+            e.get('id') or e.get('href') or etree.QName(e).localname in {'pre','code','samp','kbd','blockquote','q'} for e in elem.iterancestors()
+        ):
             elem.getparent().remove(elem)
             continue
         if 'wenku8' in text.lower() and any(e.get('id') or e.get('href') for e in (*elem.iter(), *elem.iterancestors())):
@@ -2062,6 +2102,10 @@ def preserve_custom_cc_css(data: str) -> str:
 
 def sanitize_css(data: str) -> str:
     data = preserve_custom_cc_css(data)
+    data = re.sub(
+        r"body\s*:\s*not\(\[shizuku666\]\)\s*,\s*p\s*:\s*not\(\[shizuku666\]\)\s*\{\s*display\s*:\s*none\s*;?\s*\}",
+        "", data,
+    )
     # 僅清除已知外部／裝置字型規則；包內字型的家族與資源連結必須保留。
     data = re.sub(
         r"@font-face\s*\{[^{}]*\}",
@@ -2371,9 +2415,12 @@ def repair_missing_xhtml_references(root_dir: Path) -> None:
                         for parent in elem.iterancestors()
                     )
                     if in_landmarks:
-                        del elem.attrib[anchor_href_attr]
-                        if html_anchor:
-                            elem.tag = f"{{{XHTML_NS}}}span"
+                        if frag[1:] in ids_for(doc_rel):
+                            elem.set(anchor_href_attr, encode_local_href(posixpath.basename(doc_rel)) + frag)
+                        else:
+                            del elem.attrib[anchor_href_attr]
+                            if html_anchor:
+                                elem.tag = f"{{{XHTML_NS}}}span"
                         changed = True
                         continue
                     anchor = frag[1:]
@@ -3514,6 +3561,32 @@ def remove_known_image_only_promotions(root_dir: Path, opf_dir: str, manifest: e
     return bool(removed) or suffix_changed
 
 
+def repair_legacy_cover_references(root, has_resource):
+    """Resolve legacy cover metadata from an existing, unambiguous image."""
+    items = root.xpath("./*[local-name()='manifest']/*[local-name()='item']")
+    images = [item for item in items if item.get("id") and
+              item.get("media-type", "").startswith("image/") and has_resource(item.get("href", ""))]
+    ids = {item.get("id"): item for item in items}
+    marked = [item for item in images if "cover-image" in item.get("properties", "").split()]
+    changed = 0
+    for meta in root.xpath("./*[local-name()='metadata']/*[local-name()='meta' and translate(@name, 'COVER', 'cover')='cover']"):
+        value = meta.get("content", "")
+        if ids.get(value) in images:
+            continue
+        matches = [item for item in images if unquote(item.get("href", "")) == unquote(value)]
+        if not matches:
+            matches = [item for item in images if posixpath.basename(unquote(item.get("href", ""))) == unquote(value)]
+        if len(matches) == 1 and (not marked or matches[0] in marked):
+            target = matches[0]
+        elif not matches and len(marked) == 1:
+            target = marked[0]
+        else:
+            continue
+        meta.set("content", target.get("id"))
+        changed += 1
+    return changed
+
+
 def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
     opf_path = root_dir / Path(opf_href)
     if not opf_path.exists():
@@ -3615,6 +3688,9 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
     removed_ids: set[str] = set()
     removed_files: set[Path] = set()
     id_renames: Dict[str, str] = {}
+    changed = bool(repair_legacy_cover_references(
+        root, lambda href: bool(href) and (root_dir / posixpath.join(opf_dir, unquote(href))).is_file()
+    )) or changed
     cover_meta_ids = set()
     if metadata is not None:
         cover_meta_ids = {
@@ -3962,7 +4038,11 @@ def cleanup_opf_manifest(root_dir: Path, opf_href: str) -> None:
                     spine.remove(itemref)
                     changed = True
                     continue
-                if "nav" in manifest_item.get("properties", "").split():
+                if (
+                    "nav" in manifest_item.get("properties", "").split()
+                    and posixpath.normpath(posixpath.join(opf_dir, unquote(href))).lower()
+                    not in hyperlinked_xhtml_targets
+                ):
                     spine.remove(itemref)
                     changed = True
                     continue

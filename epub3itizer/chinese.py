@@ -63,6 +63,10 @@ def to_traditional(text: str | None) -> str | None:
 def convert_chinese_text(text: str | None, mode: str | None) -> str | None:
     if mode in {None, "", "none"}:
         return text
+    if mode == "quotes":
+        if normalize_quotes is None:
+            raise RuntimeError("引號整理失敗：無法載入共享 zhTranslate")
+        return normalize_quotes(text) if text else text
     if mode == "s2tw":
         converter = _get_converter()
         if not converter:
@@ -122,6 +126,8 @@ def _convert_element_text(root: etree._Element, mode: str) -> None:
             attr_local = etree.QName(attr).localname.lower() if attr.startswith("{") else attr.lower()
             if attr_local in TEXT_ATTRS and not skip:
                 elem.set(attr, _convert_simplified_field(elem.attrib[attr], mode, simplified_source(elem)))
+    if mode == "quotes":
+        return
     # 轉換後更新明確來源語言，避免重跑時再次強制轉換正體文字。
     for elem in root.iter():
         if not isinstance(elem.tag, str):
@@ -136,6 +142,8 @@ def _convert_element_text(root: etree._Element, mode: str) -> None:
 def _convert_simplified_field(text: str, mode: str, force: bool = False) -> str:
     # 字詞僅轉明確簡體欄位；引號由共享 zhTranslate 獨立整理。
     parts = re.split(r'(「[^「」]*[\u3040-\u30ff][^「」]*」|〈[^〈〉]*[\u3040-\u30ff][^〈〉]*〉|《[^《》]*[\u3040-\u30ff][^《》]*》|（[^（）]*[\u3040-\u30ff][^（）]*）|\([^()]*[\u3040-\u30ff][^()]*\))', text)
+    if mode == "quotes":
+        return ''.join(part if i % 2 else convert_chinese_text(part, mode) for i, part in enumerate(parts))
     if simplified_pattern is None or normalize_quotes is None:
         raise RuntimeError("簡轉正失敗：缺少共享字形偵測")
     pattern = simplified_pattern(True)

@@ -4,7 +4,7 @@
 
 適合已有 EPUB、需要轉換格式或修正結構的使用者。TXT 建書請用 ezPub；CSS 專項檢查可接續使用 epubCssFixer。
 
-目前版本：**1.11**。版本異動見 [CHANGELOG](CHANGELOG.md)。
+目前版本：**1.12**。版本異動見 [CHANGELOG](CHANGELOG.md)。
 
 ## 安裝與快速開始
 
@@ -36,6 +36,7 @@ python -m epub3itizer --repair-only ".\input.epub" -o ".\repaired.epub"
 | EPUB2 → EPUB3 | `python -m epub3itizer input.epub -o output.epub` |
 | 只套用結構修復 | 加上 `--repair-only` |
 | 簡體轉臺灣正體 | 明確加上 `--convert-chinese s2tw` |
+| 只補引號，不改字詞與語言標記 | 加上 `--normalize-quotes`，不可同時指定簡轉正 |
 | 整個資料夾 | 輸入改為資料夾，使用 `--output-dir` |
 | 包含子資料夾 | 加上 `--recursive` |
 | Kindle 相容副本 | 使用獨立入口，見 [進階使用](docs/usage.md) |
@@ -57,6 +58,8 @@ python -m epub3itizer --repair-only ".\books" --recursive --output-dir ".\books_
 
 修復保留包內嵌入字型的 `@font-face` 與內文／標題的字型連結；最終驗證仍須確認 CSS 指向實際存在的字型資源，詳見[修復範圍](docs/repair.md)。
 
+原已列在閱讀順序、且被包內連結引用的正式目錄頁會保留在 spine，避免遺失有效的目錄地標或返回目錄連結。
+
 ```powershell
 java -jar "C:\path\to\epubcheck.jar" ".\output.epub"
 ```
@@ -74,6 +77,8 @@ EPUBCheck 與可執行它的 Java 環境只用於外部驗證，不是轉換必�
 CLI 位於 `epub3itizer/cli.py`，主要轉換在 `epub3itizer/conversion.py`，測試在 `tests/`。測試指令：`python -m pytest -q`。
 
 此專案源自 [kevinhendricks/ePub3-itizer](https://github.com/kevinhendricks/ePub3-itizer) 與 [Sigil](https://github.com/Sigil-Ebook/Sigil) 的轉換核心，現為獨立 CLI，由 [SamLaio](https://github.com/SamLaio) 維護。授權 GNU GPL v3，見 [LICENSE](LICENSE)。
+
+來源導流清理只套用已核實的文字與上下文。眾籌翻譯群的入群宣傳須群名及完整群號同頁才清理；翻譯署名、正文、引文與錨點保留。
 
 ## 第三方來源與致謝
 
@@ -121,3 +126,5 @@ CLI 位於 `epub3itizer/cli.py`，主要轉換在 `epub3itizer/conversion.py`，
 - [cerasnix/epub-ruby-fix-for-apple-books](https://github.com/cerasnix/epub-ruby-fix-for-apple-books)：參考 ruby / rt / rp 在 Apple Books 顯示與選取相容性問題。
 - [JoeCotellese/bookery](https://github.com/JoeCotellese/bookery)：參考 metadata-first 與非破壞式 EPUB metadata workflow。
 - [chayprabs/epub-validate-repair](https://github.com/chayprabs/epub-validate-repair)：參考 manifest、spine、TOC、metadata 與批次驗證修復流程。
+
+EPUB 修復會檢查舊式 `meta name="cover"` 的目標。若能從現有的封面圖片或唯一檔案對應確認目標，便改用資源清單內的圖片 ID。

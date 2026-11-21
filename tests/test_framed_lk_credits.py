@@ -32,3 +32,22 @@ def test_unsafe_block_is_not_removed(extra):
     assert '圖源：氮氣' in ''.join(root.itertext())
     if 'id=' in extra:
         assert root.xpath('//*[@id="keep"]')
+
+
+@pytest.mark.parametrize('closing', ['————————————————', '———————————————————'])
+def test_em_dash_borders_keep_illustrator_and_afterword(closing):
+    raw=etree.tostring(document(),encoding='unicode').replace('────────────','————————————————',1)
+    raw=raw.replace('────────────',closing).replace('插畫：','插圖：').replace('輕之國度：www.lightnovel.cn','www.lightnovel.cn').replace('輕之國度不負擔','LK不負擔').replace('翻譯、掃圖、錄入','翻譯、掃圖。錄入')
+    root=etree.fromstring(raw.encode())
+    remove_known_source_ad_paragraphs(root)
+    text=''.join(root.itertext())
+    assert '圖源' not in text and '輕之國度' not in text and '—'*8 not in text
+    assert all(x in text for x in ['作者：空埜一樹','插圖：ぽんじりつ','譯者：馮鈺婷','作者後記：謝謝讀者與插畫老師。'])
+    once=etree.tostring(root);remove_known_source_ad_paragraphs(root);assert etree.tostring(root)==once
+
+
+def test_em_dash_unknown_credit_or_body_is_not_deleted():
+    root=document(extra='<p>正文不能刪除。</p>')
+    root=etree.fromstring(etree.tostring(root).decode().replace('────────────','————————').encode())
+    remove_known_source_ad_paragraphs(root)
+    assert '圖源：氮氣' in ''.join(root.itertext()) and '正文不能刪除。' in ''.join(root.itertext())
